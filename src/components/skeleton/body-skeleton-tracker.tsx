@@ -75,6 +75,7 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
     lastTs: performance.now(),
     fps: 0,
   });
+  const smoothedHandsRef = useRef<Map<string, NormalizedLandmark[]>>(new Map());
 
   const settingsRef = useRef<TrackerSettings>(settings);
   settingsRef.current = settings;
@@ -277,8 +278,9 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
             if (bundle.hands && (s.mode === 'hands' || s.mode === 'both')) {
               try {
                 const res = bundle.hands.detectForVideo(videoEl, tsMs);
-                handLandmarks = res.landmarks ?? [];
+                const detectedHands = res.landmarks ?? [];
                 handedness = (res.handedness ?? []).map((c) => c[0]?.categoryName ?? '');
+                handLandmarks = smoothHandLandmarks(detectedHands, handedness, smoothedHandsRef.current);
               } catch {
                 /* ignore frame error */
               }
@@ -429,6 +431,38 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
       )}
     </div>
   );
+}
+
+function smoothHandLandmarks(
+  hands: NormalizedLandmark[][],
+  handedness: string[],
+  previousHands: Map<string, NormalizedLandmark[]>,
+): NormalizedLandmark[][] {
+  const nextHands = new Map<string, NormalizedLandmark[]>();
+  const smoothed = hands.map((landmarks, handIndex) => {
+    const key = handedness[handIndex] || `hand-${handIndex}`;
+    const previous = previousHands.get(key);
+    const result = landmarks.map((point, index) => {
+      const prior = previous?.[index];
+      if (!prior) return { ...point };
+
+      const distance = Math.hypot(point.x - prior.x, point.y - prior.y, (point.z ?? 0) - (prior.z ?? 0));
+      // Filter small frame-to-frame jitter while letting fast gestures catch up quickly.
+      const response = distance > 0.035 ? 0.82 : 0.42;
+      return {
+        ...point,
+        x: prior.x + (point.x - prior.x) * response,
+        y: prior.y + (point.y - prior.y) * response,
+        z: (prior.z ?? 0) + ((point.z ?? 0) - (prior.z ?? 0)) * response,
+      };
+    });
+    nextHands.set(key, result);
+    return result;
+  });
+
+  previousHands.clear();
+  for (const [key, landmarks] of nextHands) previousHands.set(key, landmarks);
+  return smoothed;
 }
 
 function StatusSpinner() {
