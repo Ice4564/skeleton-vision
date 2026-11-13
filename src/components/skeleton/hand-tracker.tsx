@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   FilesetResolver,
   FaceLandmarker,
@@ -11,6 +11,8 @@ import { HAND_CONNECTION_GROUPS } from '@/lib/hand-connections';
 import { Maximize2, Minimize2 } from 'lucide-react';
 
 export type HandGesture = 'finger-heart' | 'l-sign' | 'peace' | 'thumbs-up' | 'open-hand' | 'fist' | 'pinch' | 'index-up' | 'shush' | 'middle-finger' | 'none';
+export type HandImageSources = Partial<Record<HandGesture, string>>;
+export interface HandImageLayout { x: number; y: number; size: number }
 
 export interface HandResult {
   side: string;
@@ -26,6 +28,8 @@ export interface HandTrackerSettings {
   showEffects: boolean;
   pointSize: number;
   lineWidth: number;
+  effectIntensity: number;
+  effectDuration: number;
   minDetectionConfidence: number;
   minTrackingConfidence: number;
 }
@@ -39,6 +43,8 @@ export const DEFAULT_HAND_SETTINGS: HandTrackerSettings = {
   showEffects: true,
   pointSize: 5,
   lineWidth: 3,
+  effectIntensity: 1,
+  effectDuration: 1.2,
   minDetectionConfidence: 0.45,
   minTrackingConfidence: 0.45,
 };
@@ -47,6 +53,9 @@ interface HandTrackerProps {
   settings: HandTrackerSettings;
   onFps?: (fps: number) => void;
   onResults?: (result: { count: number; gestures: HandResult[] }) => void;
+  imageSources?: HandImageSources;
+  imageLayout?: HandImageLayout;
+  onImageLayoutChange?: (layout: HandImageLayout) => void;
 }
 
 type ModelState =
@@ -61,6 +70,7 @@ interface Particle {
   vy: number;
   size: number;
   life: number;
+  duration: number;
   kind: 'heart' | 'spark' | 'burst' | 'wave';
   color: string;
 }
@@ -69,7 +79,7 @@ const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-
 const HAND_MODEL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 const HAND_COLOR = '#ff78a8';
-const GESTURE_IMAGES: Partial<Record<HandGesture, string>> = {
+export const DEFAULT_GESTURE_IMAGES: Partial<Record<HandGesture, string>> = {
   'index-up': '/gestures/index.png',
   shush: '/gestures/shush.png',
   'middle-finger': '/gestures/middle.png',
@@ -88,7 +98,7 @@ export const GESTURE_LABELS: Record<HandGesture, string> = {
   none: '',
 };
 
-export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
+export function HandTracker({ settings, onFps, onResults, imageSources = {}, imageLayout = { x: 58, y: 12, size: 38 }, onImageLayoutChange }: HandTrackerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const backdropVideoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -99,6 +109,10 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   const rafRef = useRef<number | null>(null);
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
+  const imageSourcesRef = useRef(imageSources);
+  imageSourcesRef.current = imageSources;
+  const imageLayoutRef = useRef(imageLayout);
+  imageLayoutRef.current = imageLayout;
   const previousHandsRef = useRef<Map<string, NormalizedLandmark[]>>(new Map());
   const particlesRef = useRef<Particle[]>([]);
   const cachedHandsRef = useRef<NormalizedLandmark[][]>([]);
@@ -120,6 +134,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   const [activeImage, setActiveImage] = useState<{ gesture: HandGesture; src: string } | null>(null);
   const activeImageSourceRef = useRef<string | null>(null);
   const pendingImageChangeRef = useRef<{ key: string; since: number } | null>(null);
+  const imageDragRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
 
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement === containerRef.current);
@@ -334,6 +349,8 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
                     (viewport.y + center.y * viewport.height) / height,
                     width,
                     height,
+                    options.effectIntensity,
+                    options.effectDuration,
                   );
                 }
                 lastGestureBySideRef.current.set(side, gesture);
@@ -350,12 +367,14 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
           cachedHandsRef.current = landmarks;
           cachedGesturesRef.current = gestures;
 
-          const detectedGesture = gestures.find(({ gesture }) => GESTURE_IMAGES[gesture])?.gesture
+          const detectedGesture = gestures.find(({ gesture }) => imageSourcesRef.current[gesture] || DEFAULT_GESTURE_IMAGES[gesture])?.gesture
             ?? gestures.find(({ gesture }) => gesture !== 'none')?.gesture
             ?? null;
-          const imageGesture = detectedGesture && GESTURE_IMAGES[detectedGesture] ? detectedGesture : null;
-          const nextImage = imageGesture && GESTURE_IMAGES[imageGesture]
-            ? { gesture: imageGesture, src: GESTURE_IMAGES[imageGesture]! }
+          const imageGesture = detectedGesture && (imageSourcesRef.current[detectedGesture] || DEFAULT_GESTURE_IMAGES[detectedGesture])
+            ? detectedGesture
+            : null;
+          const nextImage = imageGesture
+            ? { gesture: imageGesture, src: imageSourcesRef.current[imageGesture] || DEFAULT_GESTURE_IMAGES[imageGesture]! }
             : null;
           if (nextImage && activeImageSourceRef.current !== nextImage.src) {
             if (!activeImageSourceRef.current) {
@@ -411,6 +430,8 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
                   (viewport.x + center.x * viewport.width) / width,
                   (viewport.y + center.y * viewport.height) / height,
                   gesture,
+                  options.effectIntensity,
+                  options.effectDuration,
                 );
                 lastEffectAtRef.current = time;
               }
@@ -480,6 +501,21 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   }, [settings.enabled, deviceId, loadHandModel, onFps, onResults]);
 
   const switchCamera = useCallback((nextDeviceId: string) => setDeviceId(nextDeviceId), []);
+  const startImageDrag = (event: ReactPointerEvent<HTMLImageElement>) => {
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    imageDragRef.current = { offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveImageDrag = (event: ReactPointerEvent<HTMLImageElement>) => {
+    const drag = imageDragRef.current;
+    const bounds = containerRef.current?.getBoundingClientRect();
+    if (!drag || !bounds || !onImageLayoutChange) return;
+    const current = imageLayoutRef.current;
+    const x = Math.max(0, Math.min(100 - current.size, (event.clientX - bounds.left - drag.offsetX) / bounds.width * 100));
+    const y = Math.max(0, Math.min(100 - current.size, (event.clientY - bounds.top - drag.offsetY) / bounds.height * 100));
+    onImageLayoutChange({ ...current, x, y });
+  };
 
   return (
     <div ref={containerRef} className={`relative aspect-[3/4] w-full overflow-hidden rounded-[20px] bg-[#09090b] sm:aspect-[4/3] ${fullscreen ? 'fixed inset-0 z-[9999] h-[100dvh] w-screen max-h-none max-w-none rounded-none !aspect-auto' : ''}`}>
@@ -535,7 +571,18 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
       </button>
 
       {activeImage && status === 'running' && !imageFailed && (
-        <img src={activeImage.src} alt={GESTURE_LABELS[activeImage.gesture]} onError={() => setImageFailed(true)} className="pointer-events-none absolute right-4 top-16 z-10 h-[44%] w-[44%] max-h-[48%] max-w-[48%] rounded-xl border border-white/15 bg-[#09090b]/75 p-2 object-contain shadow-xl drop-shadow-[0_4px_18px_rgba(255,120,168,0.45)]" />
+        <img
+          src={activeImage.src}
+          alt={GESTURE_LABELS[activeImage.gesture]}
+          draggable={false}
+          onError={() => setImageFailed(true)}
+          onPointerDown={startImageDrag}
+          onPointerMove={moveImageDrag}
+          onPointerUp={() => { imageDragRef.current = null; }}
+          onPointerCancel={() => { imageDragRef.current = null; }}
+          style={{ left: `${imageLayout.x}%`, top: `${imageLayout.y}%`, width: `${imageLayout.size}%`, height: `${imageLayout.size}%` }}
+          className="absolute z-10 touch-none cursor-grab rounded-xl border border-white/15 bg-[#09090b]/75 p-2 object-contain shadow-xl active:cursor-grabbing"
+        />
       )}
 
       {status !== 'running' && (
@@ -761,17 +808,19 @@ function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width:
   ctx.closePath();
 }
 
-function addGestureParticles(particles: Particle[], x: number, y: number, gesture: HandGesture) {
+function addGestureParticles(particles: Particle[], x: number, y: number, gesture: HandGesture, intensity: number, duration: number) {
   const kind = gesture === 'finger-heart' ? 'heart' : 'spark';
   const colors = ['#ff78a8', '#ffb4ce', '#ffe0ed'];
-  for (let index = 0; index < (kind === 'heart' ? 2 : 1); index++) {
+  const count = kind === 'heart' ? Math.max(1, Math.round(2 * intensity)) : 1;
+  for (let index = 0; index < count; index++) {
     particles.push({
       x: x + (Math.random() - 0.5) * 0.04,
       y: y + (Math.random() - 0.5) * 0.035,
       vx: (Math.random() - 0.5) * 0.12,
       vy: -0.08 - Math.random() * 0.08,
-      size: 0.008 + Math.random() * 0.008,
+      size: (0.008 + Math.random() * 0.008) * Math.sqrt(intensity),
       life: 1,
+      duration,
       kind,
       color: colors[index % colors.length],
     });
@@ -779,27 +828,28 @@ function addGestureParticles(particles: Particle[], x: number, y: number, gestur
   if (particles.length > 48) particles.splice(0, particles.length - 48);
 }
 
-function addPinkBurst(particles: Particle[], x: number, y: number, width: number, height: number) {
+function addPinkBurst(particles: Particle[], x: number, y: number, width: number, height: number, intensity: number, duration: number) {
   const shortSide = Math.min(width, height);
-  for (let index = 0; index < 360; index++) {
-    const angle = (Math.PI * 2 * index) / 360 + (Math.random() - 0.5) * 0.24;
-    const speed = 0.45 + Math.random() * 1.45;
+  const particleCount = Math.round(300 * intensity);
+  for (let index = 0; index < particleCount; index++) {
+    const angle = (Math.PI * 2 * index) / particleCount + (Math.random() - 0.5) * 0.24;
+    const speed = (0.45 + Math.random() * 1.45) * (0.75 + intensity * 0.25);
     particles.push({
       x, y,
       vx: Math.cos(angle) * speed * shortSide / width,
       vy: Math.sin(angle) * speed * shortSide / height,
-      size: 0.012 + Math.random() * 0.019, life: 1.2,
+      size: (0.012 + Math.random() * 0.019) * Math.sqrt(intensity), life: 1, duration,
       kind: index % 6 === 0 ? 'heart' : 'burst',
       color: ['#ff4f93', '#ff78a8', '#ff9bc0', '#ffd0e1'][index % 4],
     });
   }
   for (let index = 0; index < 3; index++) {
     particles.push({
-      x, y, vx: 0, vy: 0, size: 0.04, life: 1 - index * 0.12,
+      x, y, vx: 0, vy: 0, size: 0.04, life: 1 - index * 0.12, duration,
       kind: 'wave', color: ['#ff4f93', '#ff9bc0', '#ffe0ed'][index],
     });
   }
-  if (particles.length > 500) particles.splice(0, particles.length - 500);
+  if (particles.length > 900) particles.splice(0, particles.length - 900);
 }
 
 function advanceParticles(particles: Particle[], time: number, lastTimeRef: { current: number }) {
@@ -809,7 +859,7 @@ function advanceParticles(particles: Particle[], time: number, lastTimeRef: { cu
   for (const particle of particles) {
     particle.x += particle.vx * delta;
     particle.y += particle.vy * delta;
-    particle.life -= delta * 0.9;
+    particle.life -= delta / particle.duration;
   }
   for (let index = particles.length - 1; index >= 0; index--) {
     if (particles[index].life <= 0) particles.splice(index, 1);
