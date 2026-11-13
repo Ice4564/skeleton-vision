@@ -401,7 +401,7 @@ export default function Home() {
               <CardContent className="space-y-2 p-4 text-xs text-zinc-400">
                 <p className="font-medium text-zinc-300">คำแนะนำการใช้งาน</p>
                 <ul className="list-inside list-disc space-y-1">
-                  <li>ยืนให้กล้องเห็นตัวเต็มจากศีรษะถึงเท้า</li>
+                  <li>มือถือให้ตั้งตรง แล้วถอยกล้องจนเห็นตั้งแต่ศีรษะถึงเท้า</li>
                   <li>แสดงผลดีที่สุดในที่แสดงสว่างพอเหมาะ</li>
                   <li>เปิดดูข้อมูลในแท็บ “ข้อมูล” เพื่อดูพิกัดสำคัญ</li>
                   <li>ใช้ GPU ในการประมวลผล — แนะนำเบราว์เซอร์ล่าสุด</li>

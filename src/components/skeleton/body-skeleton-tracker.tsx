@@ -4,10 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   PoseLandmarker,
   HandLandmarker,
+  FaceLandmarker,
   FilesetResolver,
   type NormalizedLandmark,
 } from '@mediapipe/tasks-vision';
-import { POSE_CONNECTIONS, HAND_CONNECTIONS } from '@/lib/mediapipe-connections';
+import { POSE_CONNECTIONS, HAND_CONNECTIONS, FACE_CONNECTIONS } from '@/lib/mediapipe-connections';
 
 export type TrackingMode = 'pose' | 'hands' | 'both';
 
@@ -54,13 +55,15 @@ interface BodySkeletonTrackerProps {
 type LandmarkerBundle =
   | { type: 'loading' }
   | { type: 'error'; message: string }
-  | { type: 'ready'; pose: PoseLandmarker | null; hands: HandLandmarker | null };
+  | { type: 'ready'; pose: PoseLandmarker | null; hands: HandLandmarker | null; face: FaceLandmarker | null };
 
 const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm';
 const POSE_MODEL =
   'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task';
 const HAND_MODEL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+const FACE_MODEL =
+  'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
 export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkeletonTrackerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -76,6 +79,8 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
     fps: 0,
   });
   const smoothedHandsRef = useRef<Map<string, NormalizedLandmark[]>>(new Map());
+  const faceLandmarksRef = useRef<NormalizedLandmark[][]>([]);
+  const lastFaceDetectionRef = useRef(0);
 
   const settingsRef = useRef<TrackerSettings>(settings);
   settingsRef.current = settings;
@@ -114,7 +119,7 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
       const needsPose = settingsRef.current.mode === 'pose' || settingsRef.current.mode === 'both';
       const needsHands = settingsRef.current.mode === 'hands' || settingsRef.current.mode === 'both';
 
-      const [pose, hands] = await Promise.all([
+      const [pose, hands, face] = await Promise.all([
         needsPose
           ? PoseLandmarker.createFromOptions(fileset, {
               baseOptions: {
@@ -136,14 +141,29 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
               },
               runningMode: 'VIDEO',
               numHands: 2,
-              minHandDetectionConfidence: settingsRef.current.minDetectionConfidence,
-              minHandPresenceConfidence: 0.5,
+              minHandDetectionConfidence: Math.max(0.35, settingsRef.current.minDetectionConfidence - 0.1),
+              minHandPresenceConfidence: 0.4,
               minTrackingConfidence: settingsRef.current.minTrackingConfidence,
             })
           : Promise.resolve(null),
+        needsPose
+          ? FaceLandmarker.createFromOptions(fileset, {
+              baseOptions: {
+                modelAssetPath: FACE_MODEL,
+                delegate: 'GPU',
+              },
+              runningMode: 'VIDEO',
+              numFaces: 1,
+              minFaceDetectionConfidence: Math.max(0.35, settingsRef.current.minDetectionConfidence - 0.1),
+              minFacePresenceConfidence: 0.5,
+              minTrackingConfidence: settingsRef.current.minTrackingConfidence,
+              outputFaceBlendshapes: false,
+              outputFacialTransformationMatrixes: false,
+            }).catch(() => null)
+          : Promise.resolve(null),
       ]);
 
-      bundleRef.current = { type: 'ready', pose, hands };
+      bundleRef.current = { type: 'ready', pose, hands, face };
       return bundleRef.current;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -157,7 +177,7 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
   // Reset bundle when mode changes (so it loads correct landmarker next time)
   useEffect(() => {
     if (bundleRef.current.type === 'ready') {
-      const { pose, hands } = bundleRef.current;
+      const { pose, hands, face } = bundleRef.current;
       try {
         pose?.close();
       } catch {
@@ -165,6 +185,11 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
       }
       try {
         hands?.close();
+      } catch {
+        /* ignore */
+      }
+      try {
+        face?.close();
       } catch {
         /* ignore */
       }
@@ -195,11 +220,12 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
       setStatus('requesting-camera');
       setStatusMessage('กำลังขอสิทธิ์กล้อง...');
       try {
+        const portraitScreen = window.matchMedia('(max-width: 640px)').matches;
         const constraints: MediaStreamConstraints = {
           video: {
             facingMode: 'user',
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: portraitScreen ? 720 : 1280 },
+            height: { ideal: portraitScreen ? 1280 : 720 },
             ...(activeDeviceId ? { deviceId: { exact: activeDeviceId } } : {}),
           },
           audio: false,
@@ -254,15 +280,19 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
           const w = canvasEl.clientWidth;
           const h = canvasEl.clientHeight;
           ctx.clearRect(0, 0, w, h);
+          const viewport = fitVideoToCanvas(videoEl, w, h);
 
           ctx.save();
           if (s.mirror) {
-            ctx.translate(w, 0);
+            ctx.translate(viewport.x + viewport.width, viewport.y);
             ctx.scale(-1, 1);
+          } else {
+            ctx.translate(viewport.x, viewport.y);
           }
 
           let poseLandmarks: NormalizedLandmark[][] = [];
           let handLandmarks: NormalizedLandmark[][] = [];
+          let faceLandmarks: NormalizedLandmark[][] = [];
           let handedness: string[] = [];
 
           if (bundle.type === 'ready') {
@@ -274,6 +304,20 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
               } catch {
                 /* ignore frame error */
               }
+            }
+            if (bundle.face && (s.mode === 'pose' || s.mode === 'both')) {
+              if (tsMs - lastFaceDetectionRef.current >= 90) {
+                lastFaceDetectionRef.current = tsMs;
+                try {
+                  const res = bundle.face.detectForVideo(videoEl, tsMs);
+                  faceLandmarksRef.current = res.faceLandmarks ?? [];
+                } catch {
+                  /* keep last face result for this short interval */
+                }
+              }
+              faceLandmarks = faceLandmarksRef.current;
+            } else {
+              faceLandmarksRef.current = [];
             }
             if (bundle.hands && (s.mode === 'hands' || s.mode === 'both')) {
               try {
@@ -289,18 +333,21 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
 
           if (s.showSkeleton) {
             if (poseLandmarks.length > 0) {
-              drawConnections(ctx, poseLandmarks[0], POSE_CONNECTIONS, w, h, s.poseColor, s.lineWidth);
+              drawConnections(ctx, poseLandmarks[0], POSE_CONNECTIONS, viewport.width, viewport.height, s.poseColor, s.lineWidth);
+            }
+            if (faceLandmarks.length > 0) {
+              drawConnections(ctx, faceLandmarks[0], FACE_CONNECTIONS, viewport.width, viewport.height, '#fbbf24', Math.max(1, s.lineWidth * 0.7));
             }
             for (let i = 0; i < handLandmarks.length; i++) {
-              drawConnections(ctx, handLandmarks[i], HAND_CONNECTIONS, w, h, s.handColor, s.lineWidth);
+              drawConnections(ctx, handLandmarks[i], HAND_CONNECTIONS, viewport.width, viewport.height, s.handColor, s.lineWidth);
             }
           }
           if (s.showPoints) {
             if (poseLandmarks.length > 0) {
-              drawPoints(ctx, poseLandmarks[0], w, h, s.poseColor, s.accentColor, s.pointSize, s.showLabels);
+              drawPoints(ctx, poseLandmarks[0], viewport.width, viewport.height, s.poseColor, s.accentColor, s.pointSize, s.showLabels);
             }
             for (let i = 0; i < handLandmarks.length; i++) {
-              drawPoints(ctx, handLandmarks[i], w, h, s.handColor, s.accentColor, s.pointSize, s.showLabels);
+              drawPoints(ctx, handLandmarks[i], viewport.width, viewport.height, s.handColor, s.accentColor, s.pointSize, s.showLabels);
             }
           }
           ctx.restore();
@@ -380,12 +427,11 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
   return (
     <div
       ref={containerRef}
-      className="relative w-full overflow-hidden rounded-xl bg-black"
-      style={{ aspectRatio: '16 / 9' }}
+      className="relative aspect-[3/4] w-full overflow-hidden rounded-xl bg-black sm:aspect-video"
     >
       <video
         ref={videoRef}
-        className="absolute inset-0 h-full w-full object-cover"
+        className="absolute inset-0 h-full w-full object-contain"
         style={{
           transform: settings.mirror ? 'scaleX(-1)' : undefined,
           opacity: settings.showVideo ? 1 : 0,
@@ -463,6 +509,20 @@ function smoothHandLandmarks(
   previousHands.clear();
   for (const [key, landmarks] of nextHands) previousHands.set(key, landmarks);
   return smoothed;
+}
+
+function fitVideoToCanvas(video: HTMLVideoElement, width: number, height: number) {
+  const videoWidth = video.videoWidth || width;
+  const videoHeight = video.videoHeight || height;
+  const scale = Math.min(width / videoWidth, height / videoHeight);
+  const fittedWidth = videoWidth * scale;
+  const fittedHeight = videoHeight * scale;
+  return {
+    x: (width - fittedWidth) / 2,
+    y: (height - fittedHeight) / 2,
+    width: fittedWidth,
+    height: fittedHeight,
+  };
 }
 
 function StatusSpinner() {
