@@ -119,6 +119,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   const [imageFailed, setImageFailed] = useState(false);
   const [activeImage, setActiveImage] = useState<{ gesture: HandGesture; src: string } | null>(null);
   const activeImageSourceRef = useRef<string | null>(null);
+  const pendingImageChangeRef = useRef<{ key: string; since: number } | null>(null);
 
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement === containerRef.current);
@@ -349,14 +350,44 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
           cachedHandsRef.current = landmarks;
           cachedGesturesRef.current = gestures;
 
-          const imageGesture = gestures.find(({ gesture }) => GESTURE_IMAGES[gesture])?.gesture;
+          const detectedGesture = gestures.find(({ gesture }) => GESTURE_IMAGES[gesture])?.gesture
+            ?? gestures.find(({ gesture }) => gesture !== 'none')?.gesture
+            ?? null;
+          const imageGesture = detectedGesture && GESTURE_IMAGES[detectedGesture] ? detectedGesture : null;
           const nextImage = imageGesture && GESTURE_IMAGES[imageGesture]
             ? { gesture: imageGesture, src: GESTURE_IMAGES[imageGesture]! }
             : null;
-          if (activeImageSourceRef.current !== (nextImage?.src ?? null)) {
-            activeImageSourceRef.current = nextImage?.src ?? null;
-            setActiveImage(nextImage);
-            setImageFailed(false);
+          if (nextImage && activeImageSourceRef.current !== nextImage.src) {
+            if (!activeImageSourceRef.current) {
+              activeImageSourceRef.current = nextImage.src;
+              setActiveImage(nextImage);
+              setImageFailed(false);
+              pendingImageChangeRef.current = null;
+            } else if (pendingImageChangeRef.current?.key === nextImage.src) {
+              if (time - pendingImageChangeRef.current.since >= 140) {
+                activeImageSourceRef.current = nextImage.src;
+                setActiveImage(nextImage);
+                setImageFailed(false);
+                pendingImageChangeRef.current = null;
+              }
+            } else {
+              pendingImageChangeRef.current = { key: nextImage.src, since: time };
+            }
+          } else if (nextImage) {
+            pendingImageChangeRef.current = null;
+          } else if (activeImageSourceRef.current) {
+            const key = detectedGesture ?? 'no-hand';
+            const delay = detectedGesture ? 200 : 900;
+            if (pendingImageChangeRef.current?.key === key) {
+              if (time - pendingImageChangeRef.current.since >= delay) {
+                activeImageSourceRef.current = null;
+                setActiveImage(null);
+                setImageFailed(false);
+                pendingImageChangeRef.current = null;
+              }
+            } else {
+              pendingImageChangeRef.current = { key, since: time };
+            }
           }
 
           for (let index = 0; index < landmarks.length; index++) {
@@ -504,7 +535,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
       </button>
 
       {activeImage && status === 'running' && !imageFailed && (
-        <img src={activeImage.src} alt={GESTURE_LABELS[activeImage.gesture]} onError={() => setImageFailed(true)} className="pointer-events-none absolute left-1/2 top-1/2 z-10 max-h-[34%] max-w-[34%] -translate-x-1/2 -translate-y-1/2 object-contain drop-shadow-[0_4px_18px_rgba(255,120,168,0.45)]" />
+        <img src={activeImage.src} alt={GESTURE_LABELS[activeImage.gesture]} onError={() => setImageFailed(true)} className="pointer-events-none absolute right-4 top-16 z-10 h-[44%] w-[44%] max-h-[48%] max-w-[48%] rounded-xl border border-white/15 bg-[#09090b]/75 p-2 object-contain shadow-xl drop-shadow-[0_4px_18px_rgba(255,120,168,0.45)]" />
       )}
 
       {status !== 'running' && (
