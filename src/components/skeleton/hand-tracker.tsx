@@ -90,6 +90,7 @@ export const GESTURE_LABELS: Record<HandGesture, string> = {
 
 export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const backdropVideoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const modelRef = useRef<ModelState>({ type: 'loading' });
@@ -236,6 +237,10 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
         streamRef.current = stream;
         video.srcObject = stream;
         await video.play();
+        if (backdropVideoRef.current) {
+          backdropVideoRef.current.srcObject = stream;
+          await backdropVideoRef.current.play().catch(() => undefined);
+        }
 
         const refreshCameras = async () => {
           try {
@@ -448,8 +453,16 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   return (
     <div ref={containerRef} className={`relative aspect-[3/4] w-full overflow-hidden rounded-[20px] bg-[#09090b] sm:aspect-[4/3] ${fullscreen ? 'fixed inset-0 z-[9999] h-[100dvh] w-screen max-h-none max-w-none rounded-none !aspect-auto' : ''}`}>
       <video
+        ref={backdropVideoRef}
+        className="absolute inset-0 h-full w-full scale-110 object-cover blur-2xl"
+        style={{ opacity: settings.showVideo ? 0.42 : 0 }}
+        playsInline
+        muted
+        aria-hidden="true"
+      />
+      <video
         ref={videoRef}
-        className="absolute inset-0 h-full w-full object-cover"
+        className="absolute inset-0 h-full w-full object-contain"
         style={{ transform: settings.mirror ? 'scaleX(-1)' : undefined, opacity: settings.showVideo ? 1 : 0 }}
         playsInline
         muted
@@ -535,7 +548,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
 function fitVideo(video: HTMLVideoElement, width: number, height: number) {
   const sourceWidth = video.videoWidth || width;
   const sourceHeight = video.videoHeight || height;
-  const scale = Math.max(width / sourceWidth, height / sourceHeight);
+          const scale = Math.min(width / sourceWidth, height / sourceHeight);
   const fittedWidth = sourceWidth * scale;
   const fittedHeight = sourceHeight * scale;
   return { x: (width - fittedWidth) / 2, y: (height - fittedHeight) / 2, width: fittedWidth, height: fittedHeight };
