@@ -53,7 +53,19 @@ export const DEFAULT_SETTINGS: TrackerSettings = {
 interface BodySkeletonTrackerProps {
   settings: TrackerSettings;
   onFps?: (fps: number) => void;
-  onLandmarks?: (data: { pose: NormalizedLandmark[][]; hands: NormalizedLandmark[][]; handedness: string[] }) => void;
+  onLandmarks?: (data: {
+    pose: NormalizedLandmark[][];
+    hands: NormalizedLandmark[][];
+    handedness: string[];
+    faceCount: number;
+    faceActivity: FaceActivity[];
+  }) => void;
+}
+
+export interface FaceActivity {
+  blinkCount: number;
+  eyesClosed: boolean;
+  mouthMoving: boolean;
 }
 
 type LandmarkerBundle =
@@ -70,6 +82,13 @@ const FACE_MODEL =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 const PERSON_COLORS = ['#22d3ee', '#f472b6', '#a3e635', '#fbbf24'];
 const HAND_TIP_COLORS = ['#f472b6', '#fb7185', '#fbbf24', '#34d399', '#60a5fa'];
+const FACE_DETAIL_CONNECTIONS = [
+  ...FaceLandmarker.FACE_LANDMARKS_LEFT_EYEBROW,
+  ...FaceLandmarker.FACE_LANDMARKS_RIGHT_EYEBROW,
+  ...FaceLandmarker.FACE_LANDMARKS_LEFT_IRIS,
+  ...FaceLandmarker.FACE_LANDMARKS_RIGHT_IRIS,
+].map(({ start, end }) => [start, end] as const);
+const COMPLETE_FACE_CONNECTIONS = [...FACE_CONNECTIONS, ...FACE_DETAIL_CONNECTIONS];
 
 export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkeletonTrackerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -86,6 +105,8 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
   });
   const smoothedHandsRef = useRef<Map<string, NormalizedLandmark[]>>(new Map());
   const faceLandmarksRef = useRef<NormalizedLandmark[][]>([]);
+  const faceActivityRef = useRef<FaceActivity[]>([]);
+  const blinkStateRef = useRef<{ blinking: boolean; count: number }[]>([]);
   const lastFaceDetectionRef = useRef(0);
 
   const settingsRef = useRef<TrackerSettings>(settings);
@@ -163,7 +184,7 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
               minFaceDetectionConfidence: Math.max(0.35, settingsRef.current.minDetectionConfidence - 0.1),
               minFacePresenceConfidence: 0.5,
               minTrackingConfidence: settingsRef.current.minTrackingConfidence,
-              outputFaceBlendshapes: false,
+              outputFaceBlendshapes: true,
               outputFacialTransformationMatrixes: false,
             }).catch(() => null)
           : Promise.resolve(null),
@@ -317,6 +338,23 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
                 try {
                   const res = bundle.face.detectForVideo(videoEl, tsMs);
                   faceLandmarksRef.current = res.faceLandmarks ?? [];
+                  faceActivityRef.current = (res.faceBlendshapes ?? []).map((face, index) => {
+                    const scores = new Map(face.categories.map((category) => [category.categoryName, category.score] as const));
+                    const previous = blinkStateRef.current[index] ?? { blinking: false, count: 0 };
+                    const leftBlink = scores.get('eyeBlinkLeft') ?? 0;
+                    const rightBlink = scores.get('eyeBlinkRight') ?? 0;
+                    const blinkThreshold = previous.blinking ? 0.38 : 0.55;
+                    const blinking = leftBlink > blinkThreshold || rightBlink > blinkThreshold;
+                    const count = previous.count + (blinking && !previous.blinking ? 1 : 0);
+                    blinkStateRef.current[index] = { blinking, count };
+                    const jawOpen = scores.get('jawOpen') ?? 0;
+                    const mouthWasMoving = faceActivityRef.current[index]?.mouthMoving ?? false;
+                    return {
+                      blinkCount: count,
+                      eyesClosed: leftBlink > blinkThreshold && rightBlink > blinkThreshold,
+                      mouthMoving: jawOpen > (mouthWasMoving ? 0.24 : 0.36),
+                    };
+                  });
                 } catch {
                   /* keep last face result for this short interval */
                 }
@@ -324,6 +362,7 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
               faceLandmarks = faceLandmarksRef.current;
             } else {
               faceLandmarksRef.current = [];
+              faceActivityRef.current = [];
             }
             if (bundle.hands && (s.mode === 'hands' || s.mode === 'both')) {
               try {
@@ -343,6 +382,7 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
               for (const group of POSE_CONNECTION_GROUPS) {
                 drawConnections(ctx, poseLandmarks[i], group.connections, viewport.width, viewport.height, group.color, s.lineWidth);
               }
+              drawPersonBounds(ctx, poseLandmarks[i], viewport.width, viewport.height, color, i);
             }
             if (s.showPoints) {
               drawPoints(ctx, poseLandmarks[i], viewport.width, viewport.height, color, s.accentColor, s.pointSize, s.showLabels);
@@ -350,8 +390,9 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
           }
           if (s.showSkeleton) {
             for (const face of faceLandmarks) {
-              drawConnections(ctx, face, FACE_CONNECTIONS, viewport.width, viewport.height, '#fbbf24', Math.max(1, s.lineWidth * 0.7));
+              drawConnections(ctx, face, COMPLETE_FACE_CONNECTIONS, viewport.width, viewport.height, '#fbbf24', Math.max(1, s.lineWidth * 0.7));
             }
+            drawWristLinks(ctx, poseLandmarks, handLandmarks, viewport.width, viewport.height);
             for (const hand of handLandmarks) {
               for (const group of HAND_CONNECTION_GROUPS) {
                 drawConnections(ctx, hand, group.connections, viewport.width, viewport.height, group.color, s.lineWidth);
@@ -375,7 +416,13 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
             onFps?.(fpsState.fps);
           }
 
-          onLandmarks?.({ pose: poseLandmarks, hands: handLandmarks, handedness });
+          onLandmarks?.({
+            pose: poseLandmarks,
+            hands: handLandmarks,
+            handedness,
+            faceCount: faceLandmarks.length,
+            faceActivity: faceActivityRef.current,
+          });
 
           rafRef.current = requestAnimationFrame(renderLoop);
         };
@@ -561,6 +608,90 @@ function StatusSpinner() {
   return (
     <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/30 border-t-cyan-400" />
   );
+}
+
+function drawPersonBounds(
+  ctx: CanvasRenderingContext2D,
+  landmarks: NormalizedLandmark[],
+  width: number,
+  height: number,
+  color: string,
+  personIndex: number,
+) {
+  const visible = landmarks.filter((point) => (point.visibility ?? 1) >= 0.35);
+  if (visible.length < 8) return;
+
+  const paddingX = 0.025;
+  const paddingY = 0.025;
+  const left = Math.max(0, Math.min(...visible.map((point) => point.x)) - paddingX) * width;
+  const top = Math.max(0, Math.min(...visible.map((point) => point.y)) - paddingY) * height;
+  const right = Math.min(1, Math.max(...visible.map((point) => point.x)) + paddingX) * width;
+  const bottom = Math.min(1, Math.max(...visible.map((point) => point.y)) + paddingY) * height;
+  if (right - left < 12 || bottom - top < 20) return;
+
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([7, 5]);
+  ctx.globalAlpha = 0.85;
+  ctx.strokeRect(left, top, right - left, bottom - top);
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+  ctx.font = '600 11px ui-sans-serif, system-ui, sans-serif';
+  const label = `คน ${personIndex + 1}`;
+  const labelWidth = ctx.measureText(label).width + 14;
+  ctx.fillRect(left, Math.max(0, top - 22), labelWidth, 20);
+  ctx.fillStyle = '#09090b';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(label, left + 7, Math.max(10, top - 12));
+  ctx.restore();
+}
+
+function drawWristLinks(
+  ctx: CanvasRenderingContext2D,
+  poses: NormalizedLandmark[][],
+  hands: NormalizedLandmark[][],
+  width: number,
+  height: number,
+) {
+  const wristCandidates = poses.flatMap((pose) => [15, 16]
+    .map((index) => pose[index])
+    .filter((point): point is NormalizedLandmark => point !== undefined && (point.visibility ?? 1) >= 0.4));
+  const used = new Set<number>();
+  ctx.save();
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.globalAlpha = 0.7;
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+
+  for (const hand of hands) {
+    const wrist = hand[0];
+    if (!wrist) continue;
+    let bestIndex = -1;
+    let bestDistance = Infinity;
+    for (let i = 0; i < wristCandidates.length; i++) {
+      if (used.has(i)) continue;
+      const candidate = wristCandidates[i];
+      const dx = (candidate.x - wrist.x) * width;
+      const dy = (candidate.y - wrist.y) * height;
+      const distance = Math.hypot(dx / width, dy / height);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+      }
+    }
+    if (bestIndex < 0 || bestDistance > 0.08) continue;
+    used.add(bestIndex);
+    const poseWrist = wristCandidates[bestIndex];
+    ctx.moveTo(poseWrist.x * width, poseWrist.y * height);
+    ctx.lineTo(wrist.x * width, wrist.y * height);
+  }
+
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawConnections(

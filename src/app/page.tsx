@@ -18,14 +18,15 @@ import { Separator } from '@/components/ui/separator';
 import {
   Activity,
   Camera,
+  Eye,
   Hand,
   Layers,
+  MessageCircle,
   Pause,
   Play,
   PersonStanding,
   RefreshCw,
   Settings2,
-  Sparkles,
   Zap,
 } from 'lucide-react';
 import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
@@ -33,6 +34,10 @@ import type { NormalizedLandmark } from '@mediapipe/tasks-vision';
 interface LandmarkSummary {
   poseCount: number;
   handCount: number;
+  faceCount: number;
+  blinkCount: number;
+  eyesClosed: boolean;
+  mouthMoving: boolean;
   handedness: string[];
   keyPoints: { name: string; x: number; y: number; visibility: number }[];
 }
@@ -43,6 +48,10 @@ export default function Home() {
   const [summary, setSummary] = useState<LandmarkSummary>({
     poseCount: 0,
     handCount: 0,
+    faceCount: 0,
+    blinkCount: 0,
+    eyesClosed: false,
+    mouthMoving: false,
     handedness: [],
     keyPoints: [],
   });
@@ -52,7 +61,13 @@ export default function Home() {
   const lastSummaryRef = useRef(0);
 
   const handleLandmarks = useCallback(
-    (data: { pose: NormalizedLandmark[][]; hands: NormalizedLandmark[][]; handedness: string[] }) => {
+    (data: {
+      pose: NormalizedLandmark[][];
+      hands: NormalizedLandmark[][];
+      handedness: string[];
+      faceCount: number;
+      faceActivity: { blinkCount: number; eyesClosed: boolean; mouthMoving: boolean }[];
+    }) => {
       // Throttle summary updates to ~5/s to avoid React thrash
       const now = performance.now();
       if (now - lastSummaryRef.current < 200) return;
@@ -88,6 +103,10 @@ export default function Home() {
       setSummary({
         poseCount: data.pose.length,
         handCount: data.hands.length,
+        faceCount: data.faceCount,
+        blinkCount: data.faceActivity.reduce((total, face) => total + face.blinkCount, 0),
+        eyesClosed: data.faceActivity.some((face) => face.eyesClosed),
+        mouthMoving: data.faceActivity.some((face) => face.mouthMoving),
         handedness: data.handedness,
         keyPoints,
       });
@@ -113,7 +132,7 @@ export default function Home() {
                 Skeleton Vision
               </h1>
               <p className="text-[11px] text-zinc-400 sm:text-xs">
-                จับการเคลื่อนไหวร่างกายและมือด้วย MediaPipe
+                โครงร่าง มือ ใบหน้า ตา และปากแบบเรียลไทม์
               </p>
             </div>
           </div>
@@ -195,11 +214,11 @@ export default function Home() {
             </div>
 
             {/* Stats row */}
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
               <StatCard
                 icon={<PersonStanding className="h-4 w-4" />}
                 label="โครงร่างกาย"
-                value={summary.poseCount > 0 ? 'พบ' : 'ไม่พบ'}
+                value={String(summary.poseCount)}
                 color="text-cyan-400"
               />
               <StatCard
@@ -209,16 +228,34 @@ export default function Home() {
                 color="text-pink-400"
               />
               <StatCard
+                icon={<Eye className="h-4 w-4" />}
+                label="ใบหน้า"
+                value={String(summary.faceCount)}
+                color="text-amber-400"
+              />
+              <StatCard
+                icon={<Eye className="h-4 w-4" />}
+                label="กะพริบตา"
+                value={String(summary.blinkCount)}
+                color="text-violet-400"
+              />
+              <StatCard
+                icon={<Eye className="h-4 w-4" />}
+                label="ดวงตา"
+                value={summary.faceCount === 0 ? '—' : summary.eyesClosed ? 'ปิด' : 'เปิด'}
+                color="text-sky-400"
+              />
+              <StatCard
+                icon={<MessageCircle className="h-4 w-4" />}
+                label="การขยับปาก"
+                value={summary.faceCount === 0 ? '—' : summary.mouthMoving ? 'กำลังขยับ' : 'นิ่ง'}
+                color="text-rose-400"
+              />
+              <StatCard
                 icon={<Activity className="h-4 w-4" />}
                 label="FPS"
                 value={fps.toFixed(1)}
                 color="text-emerald-400"
-              />
-              <StatCard
-                icon={<Sparkles className="h-4 w-4" />}
-                label="ด้านมือ"
-                value={summary.handedness.length > 0 ? summary.handedness.join(', ') : '—'}
-                color="text-amber-400"
               />
             </div>
           </div>
@@ -382,9 +419,24 @@ export default function Home() {
                         <span className="text-cyan-400">{summary.poseCount}</span> ร่าง
                       </p>
                       <p>
+                        <span className="text-zinc-500">ใบหน้า:</span>{' '}
+                        <span className="text-amber-400">{summary.faceCount}</span> หน้า
+                      </p>
+                      <p>
                         <span className="text-zinc-500">มือ:</span>{' '}
                         <span className="text-pink-400">{summary.handCount}</span>{' '}
                         {summary.handedness.length > 0 && `(${summary.handedness.join(', ')})`}
+                      </p>
+                      <p>
+                        <span className="text-zinc-500">กะพริบตา:</span>{' '}
+                        <span className="text-violet-400">{summary.blinkCount}</span> ครั้ง
+                      </p>
+                      <p>
+                        <span className="text-zinc-500">ตา:</span>{' '}
+                        <span className="text-sky-400">{summary.faceCount === 0 ? '—' : summary.eyesClosed ? 'ปิด' : 'เปิด'}</span>
+                        {' · '}
+                        <span className="text-zinc-500">ปาก:</span>{' '}
+                        <span className="text-rose-400">{summary.faceCount === 0 ? '—' : summary.mouthMoving ? 'ขยับ' : 'นิ่ง'}</span>
                       </p>
                       <p>
                         <span className="text-zinc-500">FPS:</span>{' '}
@@ -404,6 +456,7 @@ export default function Home() {
                   <li>มือถือให้ตั้งตรง แล้วถอยกล้องจนเห็นตั้งแต่ศีรษะถึงเท้า</li>
                   <li>แสดงผลดีที่สุดในที่แสดงสว่างพอเหมาะ</li>
                   <li>ใช้กล้องมือถือกับคอมได้เมื่อเชื่อมเป็นเว็บแคม แล้วเลือกจากเมนูกล้อง</li>
+                  <li>การพูดประเมินจากการขยับปาก ไม่ได้เปิดหรือบันทึกเสียง</li>
                   <li>เปิดดูข้อมูลในแท็บ “ข้อมูล” เพื่อดูพิกัดสำคัญ</li>
                   <li>ใช้ GPU ในการประมวลผล — แนะนำเบราว์เซอร์ล่าสุด</li>
                 </ul>
