@@ -14,23 +14,23 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Skeleton Vision - จับการเคลื่อนไหวร่างกายและมือ",
-  description: "เว็บแอปจับการเคลื่อนไหวของร่างกายและมือผ่านกล้องเว็บแคม แสดงผลเป็นโครงกระดูกเรียลไทม์ด้วย MediaPipe",
-  keywords: ["skeleton", "pose tracking", "hand tracking", "MediaPipe", "webcam", "body tracking"],
+  title: "Skeleton Vision - จับมือและท่าทาง",
+  description: "ติดตามข้อมือ ข้อนิ้ว และปลายนิ้วแบบเรียลไทม์ พร้อมเอฟเฟกต์ท่ามือ",
+  keywords: ["hand tracking", "finger tracking", "hand gestures", "MediaPipe", "webcam"],
   authors: [{ name: "Z.ai Team" }],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
   openGraph: {
     title: "Skeleton Vision",
-    description: "Real-time body and hand skeleton tracking via webcam",
+    description: "Real-time hand and finger tracking with playful gesture effects",
     siteName: "Skeleton Vision",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
     title: "Skeleton Vision",
-    description: "Real-time body and hand skeleton tracking via webcam",
+    description: "Real-time hand and finger tracking with playful gesture effects",
   },
 };
 
