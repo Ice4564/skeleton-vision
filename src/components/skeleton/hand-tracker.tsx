@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   FilesetResolver,
+  FaceLandmarker,
   HandLandmarker,
   type NormalizedLandmark,
 } from '@mediapipe/tasks-vision';
@@ -60,7 +61,7 @@ interface Particle {
   vy: number;
   size: number;
   life: number;
-  kind: 'heart' | 'spark' | 'burst';
+  kind: 'heart' | 'spark' | 'burst' | 'wave';
   color: string;
 }
 
@@ -82,7 +83,7 @@ export const GESTURE_LABELS: Record<HandGesture, string> = {
   fist: 'กำมือ',
   pinch: 'แตะปลายนิ้ว',
   'index-up': 'ชูนิ้วชี้',
-  shush: 'ชูนิ้วชี้ไว้ใกล้ปาก',
+  shush: 'นิ้วชี้แตะปาก',
   'middle-finger': 'ชูนิ้วกลาง',
   none: '',
 };
@@ -92,6 +93,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const modelRef = useRef<ModelState>({ type: 'loading' });
+  const faceRef = useRef<FaceLandmarker | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const rafRef = useRef<number | null>(null);
   const settingsRef = useRef(settings);
@@ -124,6 +126,8 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   useEffect(() => () => {
     if (modelRef.current.type === 'ready') {
       modelRef.current.hands.close();
+      faceRef.current?.close();
+      faceRef.current = null;
       modelRef.current = { type: 'loading' };
     }
   }, []);
@@ -142,6 +146,21 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
         minHandPresenceConfidence: 0.4,
         minTrackingConfidence: settingsRef.current.minTrackingConfidence,
       });
+      try {
+        faceRef.current = await FaceLandmarker.createFromOptions(fileset, {
+          baseOptions: {
+            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+            delegate: 'GPU',
+          },
+          runningMode: 'VIDEO',
+          numFaces: 1,
+          minFaceDetectionConfidence: 0.45,
+          minFacePresenceConfidence: 0.4,
+          minTrackingConfidence: 0.45,
+        });
+      } catch {
+        faceRef.current = null;
+      }
       modelRef.current = { type: 'ready', hands };
       return modelRef.current;
     } catch (error) {
@@ -254,9 +273,21 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
               const result = model.hands.detectForVideo(currentVideo, time);
               sides = (result.handedness ?? []).map((side) => side[0]?.categoryName ?? '');
               landmarks = smoothHands(result.landmarks ?? [], sides, previousHandsRef.current);
+              let mouth: { x: number; y: number } | null = null;
+              try {
+                const faceResult = faceRef.current?.detectForVideo(currentVideo, time);
+                const face = faceResult?.faceLandmarks[0];
+                const upperLip = face?.[13];
+                const lowerLip = face?.[14];
+                if (upperLip && lowerLip) {
+                  mouth = { x: (upperLip.x + lowerLip.x) / 2, y: (upperLip.y + lowerLip.y) / 2 };
+                }
+              } catch {
+                mouth = null;
+              }
               gestures = landmarks.map((hand, index) => ({
                 side: sides[index] || `มือ ${index + 1}`,
-                gesture: recognizeGesture(hand, handGestureCenter(hand, 'none')),
+                gesture: recognizeGesture(hand, mouth),
               }));
               for (let index = 0; index < landmarks.length; index++) {
                 const side = sides[index] || `มือ ${index + 1}`;
@@ -264,7 +295,13 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
                 const previousGesture = lastGestureBySideRef.current.get(side);
                 if (options.showEffects && previousGesture === 'fist' && gesture === 'open-hand') {
                   const center = handGestureCenter(landmarks[index], gesture);
-                  addPinkBurst(particlesRef.current, center.x, center.y);
+                  addPinkBurst(
+                    particlesRef.current,
+                    (viewport.x + center.x * viewport.width) / width,
+                    (viewport.y + center.y * viewport.height) / height,
+                    width,
+                    height,
+                  );
                 }
                 lastGestureBySideRef.current.set(side, gesture);
               }
@@ -306,18 +343,23 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
                 options.mirror,
               );
               if (options.showEffects && gesture === 'finger-heart' && time - lastEffectAtRef.current > 180) {
-                addGestureParticles(particlesRef.current, center.x, center.y, gesture);
+                addGestureParticles(
+                  particlesRef.current,
+                  (viewport.x + center.x * viewport.width) / width,
+                  (viewport.y + center.y * viewport.height) / height,
+                  gesture,
+                );
                 lastEffectAtRef.current = time;
               }
             }
           }
+          ctx.restore();
           if (options.showEffects) {
             advanceParticles(particlesRef.current, time, particleTimeRef);
-            drawParticles(ctx, particlesRef.current, viewport.width, viewport.height, time);
+            drawParticles(ctx, particlesRef.current, width, height, time);
           } else {
             particlesRef.current = [];
           }
-          ctx.restore();
 
           const fps = fpsRef.current;
           fps.frames++;
@@ -377,19 +419,29 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   const switchCamera = useCallback((nextDeviceId: string) => setDeviceId(nextDeviceId), []);
 
   return (
-    <div ref={containerRef} className={`relative aspect-[3/4] w-full overflow-hidden rounded-[20px] bg-[#09090b] sm:aspect-[4/3] ${fullscreen ? 'h-screen w-screen rounded-none aspect-auto' : ''}`}>
+    <div ref={containerRef} className={`relative aspect-[3/4] w-full overflow-hidden rounded-[20px] bg-[#09090b] sm:aspect-[4/3] ${fullscreen ? 'fixed inset-0 z-[9999] h-[100dvh] w-screen max-h-none max-w-none rounded-none !aspect-auto' : ''}`}>
       <video
         ref={videoRef}
-        className="absolute inset-0 h-full w-full object-contain"
+        className="absolute inset-0 h-full w-full object-cover"
         style={{ transform: settings.mirror ? 'scaleX(-1)' : undefined, opacity: settings.showVideo ? 1 : 0 }}
         playsInline
         muted
       />
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
 
-      <button type="button" onClick={() => {
-        if (document.fullscreenElement) void document.exitFullscreen();
-        else void containerRef.current?.requestFullscreen();
+      <button type="button" onClick={async () => {
+        if (fullscreen) {
+          if (document.fullscreenElement) await document.exitFullscreen();
+          else setFullscreen(false);
+        } else if (containerRef.current?.requestFullscreen) {
+          try {
+            await containerRef.current.requestFullscreen();
+          } catch {
+            setFullscreen(true);
+          }
+        } else {
+          setFullscreen(true);
+        }
       }} className="absolute bottom-4 right-4 z-20 rounded-lg border border-white/20 bg-[#171514]/85 p-2.5 text-white shadow-lg backdrop-blur transition hover:bg-[#292522]" aria-label={fullscreen ? 'ออกจากเต็มจอ' : 'แสดงเต็มจอ'} title={fullscreen ? 'ออกจากเต็มจอ' : 'แสดงเต็มจอ'}>
         {fullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
       </button>
@@ -439,7 +491,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
 function fitVideo(video: HTMLVideoElement, width: number, height: number) {
   const sourceWidth = video.videoWidth || width;
   const sourceHeight = video.videoHeight || height;
-  const scale = Math.min(width / sourceWidth, height / sourceHeight);
+  const scale = Math.max(width / sourceWidth, height / sourceHeight);
   const fittedWidth = sourceWidth * scale;
   const fittedHeight = sourceHeight * scale;
   return { x: (width - fittedWidth) / 2, y: (height - fittedHeight) / 2, width: fittedWidth, height: fittedHeight };
@@ -495,7 +547,7 @@ function distance(a: NormalizedLandmark, b: NormalizedLandmark) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function recognizeGesture(hand: NormalizedLandmark[], center: { x: number; y: number }): HandGesture {
+function recognizeGesture(hand: NormalizedLandmark[], mouth: { x: number; y: number } | null): HandGesture {
   if (hand.length < 21) return 'none';
   const wrist = hand[0];
   const extended = [
@@ -512,10 +564,21 @@ function recognizeGesture(hand: NormalizedLandmark[], center: { x: number; y: nu
   const thumbLength = distance(hand[4], wrist);
   const indexLength = distance(hand[8], wrist);
   const nearRightAngle = Math.abs(thumbIndexDot / Math.max(thumbLength * indexLength, 0.0001)) < 0.72;
+  const indexBaseX = hand[8].x - hand[5].x;
+  const indexBaseY = hand[8].y - hand[5].y;
+  const indexAngleFromVertical = Math.atan2(Math.abs(indexBaseX), Math.abs(indexBaseY)) * (180 / Math.PI);
+  const segmentOne = { x: hand[6].x - hand[5].x, y: hand[6].y - hand[5].y };
+  const segmentTwo = { x: hand[8].x - hand[7].x, y: hand[8].y - hand[7].y };
+  const segmentCosine = (segmentOne.x * segmentTwo.x + segmentOne.y * segmentTwo.y) /
+    Math.max(Math.hypot(segmentOne.x, segmentOne.y) * Math.hypot(segmentTwo.x, segmentTwo.y), 0.0001);
+  const indexIsStraight = segmentCosine > 0.78;
+  const fingertipNearMouth = mouth !== null && distance(hand[8], mouth) < Math.max(0.045, Math.min(0.085, palmWidth * 0.8));
+  const shushPose = index && !middle && !ring && !pinky && fingertipNearMouth && indexIsStraight && indexAngleFromVertical >= 20 && indexAngleFromVertical <= 70;
 
   if (middle && !index && !ring && !pinky) return 'middle-finger';
+  if (shushPose) return 'shush';
   if (index && !middle && !ring && !pinky && !thumb) {
-    return center.x > 0.2 && center.x < 0.8 && center.y > 0.14 && center.y < 0.58 ? 'shush' : 'index-up';
+    return 'index-up';
   }
   if (pinch && !middle && !ring && !pinky) return 'finger-heart';
   if (thumb && index && !middle && !ring && !pinky && nearRightAngle) return 'l-sign';
@@ -628,17 +691,27 @@ function addGestureParticles(particles: Particle[], x: number, y: number, gestur
   if (particles.length > 48) particles.splice(0, particles.length - 48);
 }
 
-function addPinkBurst(particles: Particle[], x: number, y: number) {
-  for (let index = 0; index < 34; index++) {
-    const angle = (Math.PI * 2 * index) / 34 + (Math.random() - 0.5) * 0.22;
-    const speed = 0.2 + Math.random() * 0.34;
+function addPinkBurst(particles: Particle[], x: number, y: number, width: number, height: number) {
+  const shortSide = Math.min(width, height);
+  for (let index = 0; index < 360; index++) {
+    const angle = (Math.PI * 2 * index) / 360 + (Math.random() - 0.5) * 0.24;
+    const speed = 0.45 + Math.random() * 1.45;
     particles.push({
-      x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
-      size: 0.012 + Math.random() * 0.014, life: 1, kind: index % 3 === 0 ? 'heart' : 'burst',
-      color: ['#ff78a8', '#ffb4ce', '#ffe0ed'][index % 3],
+      x, y,
+      vx: Math.cos(angle) * speed * shortSide / width,
+      vy: Math.sin(angle) * speed * shortSide / height,
+      size: 0.012 + Math.random() * 0.019, life: 1.2,
+      kind: index % 6 === 0 ? 'heart' : 'burst',
+      color: ['#ff4f93', '#ff78a8', '#ff9bc0', '#ffd0e1'][index % 4],
     });
   }
-  if (particles.length > 100) particles.splice(0, particles.length - 100);
+  for (let index = 0; index < 3; index++) {
+    particles.push({
+      x, y, vx: 0, vy: 0, size: 0.04, life: 1 - index * 0.12,
+      kind: 'wave', color: ['#ff4f93', '#ff9bc0', '#ffe0ed'][index],
+    });
+  }
+  if (particles.length > 500) particles.splice(0, particles.length - 500);
 }
 
 function advanceParticles(particles: Particle[], time: number, lastTimeRef: { current: number }) {
@@ -664,9 +737,21 @@ function drawParticles(ctx: CanvasRenderingContext2D, particles: Particle[], wid
     ctx.save();
     ctx.globalAlpha = Math.max(0, particle.life);
     if (particle.kind === 'heart') drawHeart(ctx, x, y, size, particle.color);
+    else if (particle.kind === 'wave') drawWave(ctx, x, y, Math.max(width, height) * (1 - particle.life) * 1.25, particle.color, particle.life);
     else drawSpark(ctx, x, y, size, particle.color);
     ctx.restore();
   }
+}
+
+function drawWave(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, color: string, life: number) {
+  ctx.beginPath();
+  ctx.arc(x, y, Math.max(4, radius), 0, Math.PI * 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2 + life * 7;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 18 * life;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
 }
 
 function drawHeart(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {

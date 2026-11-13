@@ -33,7 +33,7 @@ const PRACTICE_GESTURES: { gesture: HandResult['gesture']; description: string; 
   { gesture: 'open-hand', description: 'แบมือให้เห็นปลายนิ้วครบ', icon: Eye },
   { gesture: 'fist', description: 'กำมือเบา ๆ', icon: Activity },
   { gesture: 'index-up', description: 'ชูนิ้วชี้เดี่ยว', icon: MousePointer2 },
-  { gesture: 'shush', description: 'ชูนิ้วชี้บริเวณกลางภาพ', icon: Fingerprint },
+  { gesture: 'shush', description: 'ปลายนิ้วชี้แตะปาก นิ้วตรงเอียงราว 45°', icon: Fingerprint },
   { gesture: 'middle-finger', description: 'ชูนิ้วกลาง นิ้วอื่นงอ', icon: Hand },
 ];
 
@@ -192,10 +192,10 @@ export default function HandHome() {
                 <Range label="ความหนาเส้น" value={settings.lineWidth} min={1} max={6} onChange={(value) => update('lineWidth', value)} />
               </div>
               <div className="mt-5 border-t border-white/[0.08] pt-4 text-xs leading-5 text-[#aaa39d]">
-                กำมือแล้วแบมือเพื่อปล่อยประกายระเบิดสีชมพู · รูปท่ามือวางไว้ที่ <span className="text-[#ffb4ce]">public/gestures/</span>
+                กำมือแล้วแบมือเพื่อปล่อยประกายระเบิดทั่วภาพ · รูปท่ามือวางไว้ที่ <span className="text-[#ffb4ce]">public/gestures/</span>
                 <div className="mt-2 space-y-1 font-mono text-[11px] text-[#85807b]">
                   <p>index.png — ชูนิ้วชี้</p>
-                  <p>shush.png — ชูนิ้วชี้กลางภาพ</p>
+                  <p>shush.png — นิ้วชี้ตรงแตะปาก เอียงราว 45°</p>
                   <p>middle.png — ชูนิ้วกลาง</p>
                 </div>
               </div>
