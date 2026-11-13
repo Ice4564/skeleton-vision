@@ -8,7 +8,11 @@ import {
   FilesetResolver,
   type NormalizedLandmark,
 } from '@mediapipe/tasks-vision';
-import { POSE_CONNECTIONS, HAND_CONNECTIONS, FACE_CONNECTIONS } from '@/lib/mediapipe-connections';
+import {
+  POSE_CONNECTION_GROUPS,
+  HAND_CONNECTION_GROUPS,
+  FACE_CONNECTIONS,
+} from '@/lib/mediapipe-connections';
 
 export type TrackingMode = 'pose' | 'hands' | 'both';
 
@@ -64,6 +68,8 @@ const HAND_MODEL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 const FACE_MODEL =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+const PERSON_COLORS = ['#22d3ee', '#f472b6', '#a3e635', '#fbbf24'];
+const HAND_TIP_COLORS = ['#f472b6', '#fb7185', '#fbbf24', '#34d399', '#60a5fa'];
 
 export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkeletonTrackerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -127,7 +133,7 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
                 delegate: 'GPU',
               },
               runningMode: 'VIDEO',
-              numPoses: 1,
+              numPoses: 2,
               minPoseDetectionConfidence: settingsRef.current.minDetectionConfidence,
               minPosePresenceConfidence: 0.5,
               minTrackingConfidence: settingsRef.current.minTrackingConfidence,
@@ -140,7 +146,7 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
                 delegate: 'GPU',
               },
               runningMode: 'VIDEO',
-              numHands: 2,
+              numHands: 4,
               minHandDetectionConfidence: Math.max(0.35, settingsRef.current.minDetectionConfidence - 0.1),
               minHandPresenceConfidence: 0.4,
               minTrackingConfidence: settingsRef.current.minTrackingConfidence,
@@ -153,7 +159,7 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
                 delegate: 'GPU',
               },
               runningMode: 'VIDEO',
-              numFaces: 1,
+              numFaces: 2,
               minFaceDetectionConfidence: Math.max(0.35, settingsRef.current.minDetectionConfidence - 0.1),
               minFacePresenceConfidence: 0.5,
               minTrackingConfidence: settingsRef.current.minTrackingConfidence,
@@ -331,23 +337,31 @@ export function BodySkeletonTracker({ settings, onFps, onLandmarks }: BodySkelet
             }
           }
 
+          for (let i = 0; i < poseLandmarks.length; i++) {
+            const color = PERSON_COLORS[i % PERSON_COLORS.length];
+            if (s.showSkeleton) {
+              for (const group of POSE_CONNECTION_GROUPS) {
+                drawConnections(ctx, poseLandmarks[i], group.connections, viewport.width, viewport.height, group.color, s.lineWidth);
+              }
+            }
+            if (s.showPoints) {
+              drawPoints(ctx, poseLandmarks[i], viewport.width, viewport.height, color, s.accentColor, s.pointSize, s.showLabels);
+            }
+          }
           if (s.showSkeleton) {
-            if (poseLandmarks.length > 0) {
-              drawConnections(ctx, poseLandmarks[0], POSE_CONNECTIONS, viewport.width, viewport.height, s.poseColor, s.lineWidth);
+            for (const face of faceLandmarks) {
+              drawConnections(ctx, face, FACE_CONNECTIONS, viewport.width, viewport.height, '#fbbf24', Math.max(1, s.lineWidth * 0.7));
             }
-            if (faceLandmarks.length > 0) {
-              drawConnections(ctx, faceLandmarks[0], FACE_CONNECTIONS, viewport.width, viewport.height, '#fbbf24', Math.max(1, s.lineWidth * 0.7));
-            }
-            for (let i = 0; i < handLandmarks.length; i++) {
-              drawConnections(ctx, handLandmarks[i], HAND_CONNECTIONS, viewport.width, viewport.height, s.handColor, s.lineWidth);
+            for (const hand of handLandmarks) {
+              for (const group of HAND_CONNECTION_GROUPS) {
+                drawConnections(ctx, hand, group.connections, viewport.width, viewport.height, group.color, s.lineWidth);
+              }
             }
           }
           if (s.showPoints) {
-            if (poseLandmarks.length > 0) {
-              drawPoints(ctx, poseLandmarks[0], viewport.width, viewport.height, s.poseColor, s.accentColor, s.pointSize, s.showLabels);
-            }
-            for (let i = 0; i < handLandmarks.length; i++) {
-              drawPoints(ctx, handLandmarks[i], viewport.width, viewport.height, s.handColor, s.accentColor, s.pointSize, s.showLabels);
+            for (const hand of handLandmarks) {
+              drawPoints(ctx, hand, viewport.width, viewport.height, s.handColor, s.accentColor, s.pointSize, s.showLabels);
+              drawFingertips(ctx, hand, viewport.width, viewport.height, s.handColor, s.pointSize);
             }
           }
           ctx.restore();
@@ -485,9 +499,27 @@ function smoothHandLandmarks(
   previousHands: Map<string, NormalizedLandmark[]>,
 ): NormalizedLandmark[][] {
   const nextHands = new Map<string, NormalizedLandmark[]>();
+  const matchedPrevious = new Set<string>();
   const smoothed = hands.map((landmarks, handIndex) => {
-    const key = handedness[handIndex] || `hand-${handIndex}`;
-    const previous = previousHands.get(key);
+    const side = handedness[handIndex] || 'unknown';
+    const wrist = landmarks[0];
+    let key: string | undefined;
+    let previous: NormalizedLandmark[] | undefined;
+    let closestDistance = Infinity;
+    if (wrist) {
+      for (const [candidateKey, candidate] of previousHands) {
+        const priorWrist = candidate[0];
+        if (!priorWrist || matchedPrevious.has(candidateKey) || !candidateKey.startsWith(`${side}:`)) continue;
+        const distance = Math.hypot(wrist.x - priorWrist.x, wrist.y - priorWrist.y);
+        if (distance < closestDistance && distance < 0.25) {
+          closestDistance = distance;
+          key = candidateKey;
+          previous = candidate;
+        }
+      }
+    }
+    key ??= `${side}:${handIndex}`;
+    matchedPrevious.add(key);
     const result = landmarks.map((point, index) => {
       const prior = previous?.[index];
       if (!prior) return { ...point };
@@ -544,7 +576,7 @@ function drawConnections(
   ctx.lineWidth = lineWidth;
   ctx.lineCap = 'round';
   ctx.shadowColor = color;
-  ctx.shadowBlur = 8;
+  ctx.shadowBlur = 3;
   ctx.beginPath();
   for (const [a, b] of connections) {
     const la = landmarks[a];
@@ -577,7 +609,7 @@ function drawPoints(
     ctx.beginPath();
     ctx.fillStyle = accent;
     ctx.shadowColor = accent;
-    ctx.shadowBlur = 10;
+    ctx.shadowBlur = 4;
     ctx.arc(x, y, size + 1.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.beginPath();
@@ -596,4 +628,27 @@ function drawPoints(
       ctx.restore();
     }
   }
+}
+
+function drawFingertips(
+  ctx: CanvasRenderingContext2D,
+  landmarks: NormalizedLandmark[],
+  width: number,
+  height: number,
+  color: string,
+  size: number,
+) {
+  for (const [tipIndex, index] of [4, 8, 12, 16, 20].entries()) {
+    const point = landmarks[index];
+    if (!point) continue;
+    ctx.beginPath();
+    const tipColor = HAND_TIP_COLORS[tipIndex] ?? color;
+    ctx.strokeStyle = tipColor;
+    ctx.lineWidth = Math.max(1, size * 0.55);
+    ctx.shadowColor = tipColor;
+    ctx.shadowBlur = 5;
+    ctx.arc(point.x * width, point.y * height, size * 1.8, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
 }

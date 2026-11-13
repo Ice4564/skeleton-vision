@@ -20,6 +20,15 @@ export const POSE_CONNECTIONS: ReadonlyArray<readonly [number, number]> = [
   [9, 10],
 ];
 
+export const POSE_CONNECTION_GROUPS = [
+  { color: '#fb7185', connections: [[11, 13], [13, 15], [15, 17], [15, 19], [15, 21], [17, 19]] as const },
+  { color: '#a78bfa', connections: [[12, 14], [14, 16], [16, 18], [16, 20], [16, 22], [18, 20]] as const },
+  { color: '#22d3ee', connections: [[11, 12], [11, 23], [12, 24], [23, 24]] as const },
+  { color: '#fbbf24', connections: [[23, 25], [25, 27], [27, 29], [27, 31], [29, 31]] as const },
+  { color: '#a3e635', connections: [[24, 26], [26, 28], [28, 30], [28, 32], [30, 32]] as const },
+  { color: '#67e8f9', connections: [[0, 1], [1, 2], [2, 3], [3, 7], [0, 4], [4, 5], [5, 6], [6, 8], [9, 10]] as const },
+];
+
 // HandLandmarker has 21 landmarks per hand.
 export const HAND_CONNECTIONS: ReadonlyArray<readonly [number, number]> = [
   // Thumb
@@ -33,6 +42,14 @@ export const HAND_CONNECTIONS: ReadonlyArray<readonly [number, number]> = [
   // Pinky
   [13, 17], [17, 18], [18, 19], [19, 20],
   [0, 17],
+];
+
+export const HAND_CONNECTION_GROUPS = [
+  { color: '#f472b6', connections: [[0, 1], [1, 2], [2, 3], [3, 4]] as const },
+  { color: '#fb7185', connections: [[0, 5], [5, 6], [6, 7], [7, 8]] as const },
+  { color: '#fbbf24', connections: [[5, 9], [9, 10], [10, 11], [11, 12]] as const },
+  { color: '#34d399', connections: [[9, 13], [13, 14], [14, 15], [15, 16]] as const },
+  { color: '#60a5fa', connections: [[13, 17], [17, 18], [18, 19], [19, 20], [0, 17]] as const },
 ];
 
 // Face mesh contours (oval, eyebrows, eyes, and lips) from the 478-point face model.
