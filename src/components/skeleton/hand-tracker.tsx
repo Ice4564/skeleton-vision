@@ -114,10 +114,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   const [deviceId, setDeviceId] = useState('');
   const [fullscreen, setFullscreen] = useState(false);
   const [cameraZoom, setCameraZoom] = useState(0.5);
-  const [hardwareZoomActive, setHardwareZoomActive] = useState(false);
-  const hardwareZoomActiveRef = useRef(false);
-  const cameraZoomRef = useRef(cameraZoom);
-  cameraZoomRef.current = cameraZoom;
+  const [zoomSupported, setZoomSupported] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
   const [activeImage, setActiveImage] = useState<{ gesture: HandGesture; src: string } | null>(null);
   const activeImageSourceRef = useRef<string | null>(null);
@@ -137,20 +134,15 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
         if (typeof track.getCapabilities !== 'function') throw new Error('Camera zoom is unavailable');
         const capabilities = track.getCapabilities() as MediaTrackCapabilities & { zoom?: { min: number; max: number } };
         const zoomRange = capabilities.zoom;
-        if (!zoomRange || cameraZoom < zoomRange.min || cameraZoom > zoomRange.max) {
-          hardwareZoomActiveRef.current = false;
-          setHardwareZoomActive(false);
+        const canZoomOutToHalf = Boolean(zoomRange && zoomRange.min <= 0.5 && zoomRange.max >= 1);
+        setZoomSupported(canZoomOutToHalf);
+        if (!canZoomOutToHalf || cameraZoom < zoomRange!.min || cameraZoom > zoomRange!.max) {
           return;
         }
         await track.applyConstraints({ advanced: [{ zoom: cameraZoom } as unknown as MediaTrackConstraintSet] });
-        if (!cancelled) {
-          hardwareZoomActiveRef.current = true;
-          setHardwareZoomActive(true);
-        }
       } catch {
         if (!cancelled) {
-          hardwareZoomActiveRef.current = false;
-          setHardwareZoomActive(false);
+          setZoomSupported(false);
         }
       }
     };
@@ -289,8 +281,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
           const options = settingsRef.current;
           const width = currentCanvas.clientWidth;
           const height = currentCanvas.clientHeight;
-          const visualZoom = hardwareZoomActiveRef.current ? 1 : cameraZoomRef.current;
-          const viewport = fitVideo(currentVideo, width, height, visualZoom);
+          const viewport = fitVideo(currentVideo, width, height);
           ctx.clearRect(0, 0, width, height);
           ctx.save();
           if (options.mirror) {
@@ -459,7 +450,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
       <video
         ref={videoRef}
         className="absolute inset-0 h-full w-full object-cover"
-        style={{ transform: `${settings.mirror ? 'scaleX(-1) ' : ''}scale(${hardwareZoomActive ? 1 : cameraZoom})`, transformOrigin: 'center', opacity: settings.showVideo ? 1 : 0 }}
+        style={{ transform: settings.mirror ? 'scaleX(-1)' : undefined, opacity: settings.showVideo ? 1 : 0 }}
         playsInline
         muted
       />
@@ -467,7 +458,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
 
       {status === 'running' && (
         <label className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-lg border border-white/15 bg-[#171514]/90 px-3 py-2 text-xs text-white shadow-lg backdrop-blur">
-          <span className="whitespace-nowrap">ซูม {cameraZoom.toFixed(2)}×</span>
+          <span className="whitespace-nowrap">{zoomSupported ? `ซูม ${cameraZoom.toFixed(2)}×` : 'กล้องนี้ไม่มีซูม 0.5×'}</span>
           <input
             aria-label="ปรับระยะซูมกล้อง"
             type="range"
@@ -475,8 +466,9 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
             max="1"
             step="0.05"
             value={cameraZoom}
+            disabled={!zoomSupported}
             onChange={(event) => setCameraZoom(Number(event.target.value))}
-            className="w-24 accent-[#ff78a8]"
+            className="w-24 accent-[#ff78a8] disabled:cursor-not-allowed disabled:opacity-40"
           />
         </label>
       )}
@@ -540,10 +532,10 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   );
 }
 
-function fitVideo(video: HTMLVideoElement, width: number, height: number, zoom = 1) {
+function fitVideo(video: HTMLVideoElement, width: number, height: number) {
   const sourceWidth = video.videoWidth || width;
   const sourceHeight = video.videoHeight || height;
-  const scale = Math.max(width / sourceWidth, height / sourceHeight) * zoom;
+  const scale = Math.max(width / sourceWidth, height / sourceHeight);
   const fittedWidth = sourceWidth * scale;
   const fittedHeight = sourceHeight * scale;
   return { x: (width - fittedWidth) / 2, y: (height - fittedHeight) / 2, width: fittedWidth, height: fittedHeight };
