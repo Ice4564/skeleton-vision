@@ -1,10 +1,10 @@
 // MediaPipe hand landmarks use 21 points: wrist, then four joints along each finger.
 export const HAND_CONNECTION_GROUPS = [
-  { color: '#ff7899', connections: [[0, 1], [1, 2], [2, 3], [3, 4]] as const },
-  { color: '#ff9e73', connections: [[0, 5], [5, 6], [6, 7], [7, 8]] as const },
-  { color: '#ffd166', connections: [[5, 9], [9, 10], [10, 11], [11, 12]] as const },
-  { color: '#70d6b5', connections: [[9, 13], [13, 14], [14, 15], [15, 16]] as const },
-  { color: '#78a9ff', connections: [[13, 17], [17, 18], [18, 19], [19, 20], [0, 17]] as const },
+  { color: '#ff78a8', connections: [[0, 1], [1, 2], [2, 3], [3, 4]] as const },
+  { color: '#ff78a8', connections: [[0, 5], [5, 6], [6, 7], [7, 8]] as const },
+  { color: '#ff78a8', connections: [[5, 9], [9, 10], [10, 11], [11, 12]] as const },
+  { color: '#ff78a8', connections: [[9, 13], [13, 14], [14, 15], [15, 16]] as const },
+  { color: '#ff78a8', connections: [[13, 17], [17, 18], [18, 19], [19, 20], [0, 17]] as const },
 ];
 
 export const HAND_LANDMARK_NAMES: Record<number, string> = {

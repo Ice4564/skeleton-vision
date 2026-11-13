@@ -7,8 +7,9 @@ import {
   type NormalizedLandmark,
 } from '@mediapipe/tasks-vision';
 import { HAND_CONNECTION_GROUPS } from '@/lib/hand-connections';
+import { Maximize2, Minimize2 } from 'lucide-react';
 
-export type HandGesture = 'finger-heart' | 'l-sign' | 'peace' | 'thumbs-up' | 'open-hand' | 'fist' | 'pinch' | 'none';
+export type HandGesture = 'finger-heart' | 'l-sign' | 'peace' | 'thumbs-up' | 'open-hand' | 'fist' | 'pinch' | 'index-up' | 'shush' | 'middle-finger' | 'none';
 
 export interface HandResult {
   side: string;
@@ -59,14 +60,19 @@ interface Particle {
   vy: number;
   size: number;
   life: number;
-  kind: 'heart' | 'spark';
+  kind: 'heart' | 'spark' | 'burst';
   color: string;
 }
 
 const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm';
 const HAND_MODEL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
-const FINGER_COLORS = ['#ff7899', '#ff9e73', '#ffd166', '#70d6b5', '#78a9ff'];
+const HAND_COLOR = '#ff78a8';
+const GESTURE_IMAGES: Partial<Record<HandGesture, string>> = {
+  'index-up': '/gestures/index.png',
+  shush: '/gestures/shush.png',
+  'middle-finger': '/gestures/middle.png',
+};
 export const GESTURE_LABELS: Record<HandGesture, string> = {
   'finger-heart': 'หัวใจนิ้ว',
   'l-sign': 'ท่า L',
@@ -75,6 +81,9 @@ export const GESTURE_LABELS: Record<HandGesture, string> = {
   'open-hand': 'แบมือ',
   fist: 'กำมือ',
   pinch: 'แตะปลายนิ้ว',
+  'index-up': 'ชูนิ้วชี้',
+  shush: 'ชูนิ้วชี้ไว้ใกล้ปาก',
+  'middle-finger': 'ชูนิ้วกลาง',
   none: '',
 };
 
@@ -93,6 +102,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   const cachedGesturesRef = useRef<HandResult[]>([]);
   const particleTimeRef = useRef(0);
   const lastEffectAtRef = useRef(0);
+  const lastGestureBySideRef = useRef<Map<string, HandGesture>>(new Map());
   const lastVideoTimeRef = useRef(-1);
   const fpsRef = useRef({ frames: 0, lastTime: 0 });
 
@@ -100,6 +110,16 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   const [message, setMessage] = useState('กดเริ่มจับมือเพื่อเปิดกล้อง');
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState('');
+  const [fullscreen, setFullscreen] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
+  const [activeImage, setActiveImage] = useState<{ gesture: HandGesture; src: string } | null>(null);
+  const activeImageSourceRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement === containerRef.current);
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+  }, []);
 
   useEffect(() => () => {
     if (modelRef.current.type === 'ready') {
@@ -149,6 +169,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
       cachedHandsRef.current = [];
       cachedGesturesRef.current = [];
       previousHandsRef.current.clear();
+      lastGestureBySideRef.current.clear();
 
       setStatus('camera');
       setMessage('กำลังขอใช้กล้อง');
@@ -233,7 +254,20 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
               const result = model.hands.detectForVideo(currentVideo, time);
               sides = (result.handedness ?? []).map((side) => side[0]?.categoryName ?? '');
               landmarks = smoothHands(result.landmarks ?? [], sides, previousHandsRef.current);
-              gestures = landmarks.map((hand, index) => ({ side: sides[index] || `มือ ${index + 1}`, gesture: recognizeGesture(hand) }));
+              gestures = landmarks.map((hand, index) => ({
+                side: sides[index] || `มือ ${index + 1}`,
+                gesture: recognizeGesture(hand, handGestureCenter(hand, 'none')),
+              }));
+              for (let index = 0; index < landmarks.length; index++) {
+                const side = sides[index] || `มือ ${index + 1}`;
+                const gesture = gestures[index]?.gesture ?? 'none';
+                const previousGesture = lastGestureBySideRef.current.get(side);
+                if (options.showEffects && previousGesture === 'fist' && gesture === 'open-hand') {
+                  const center = handGestureCenter(landmarks[index], gesture);
+                  addPinkBurst(particlesRef.current, center.x, center.y);
+                }
+                lastGestureBySideRef.current.set(side, gesture);
+              }
             } catch {
               landmarks = [];
               sides = [];
@@ -245,6 +279,16 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
           }
           cachedHandsRef.current = landmarks;
           cachedGesturesRef.current = gestures;
+
+          const imageGesture = gestures.find(({ gesture }) => GESTURE_IMAGES[gesture])?.gesture;
+          const nextImage = imageGesture && GESTURE_IMAGES[imageGesture]
+            ? { gesture: imageGesture, src: GESTURE_IMAGES[imageGesture]! }
+            : null;
+          if (activeImageSourceRef.current !== (nextImage?.src ?? null)) {
+            activeImageSourceRef.current = nextImage?.src ?? null;
+            setActiveImage(nextImage);
+            setImageFailed(false);
+          }
 
           for (let index = 0; index < landmarks.length; index++) {
             const hand = landmarks[index];
@@ -261,7 +305,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
                 viewport.width,
                 options.mirror,
               );
-              if (options.showEffects && time - lastEffectAtRef.current > 150) {
+              if (options.showEffects && gesture === 'finger-heart' && time - lastEffectAtRef.current > 180) {
                 addGestureParticles(particlesRef.current, center.x, center.y, gesture);
                 lastEffectAtRef.current = time;
               }
@@ -333,7 +377,7 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
   const switchCamera = useCallback((nextDeviceId: string) => setDeviceId(nextDeviceId), []);
 
   return (
-    <div ref={containerRef} className="relative aspect-[3/4] w-full overflow-hidden rounded-[20px] bg-[#09090b] sm:aspect-[4/3]">
+    <div ref={containerRef} className={`relative aspect-[3/4] w-full overflow-hidden rounded-[20px] bg-[#09090b] sm:aspect-[4/3] ${fullscreen ? 'h-screen w-screen rounded-none aspect-auto' : ''}`}>
       <video
         ref={videoRef}
         className="absolute inset-0 h-full w-full object-contain"
@@ -342,6 +386,17 @@ export function HandTracker({ settings, onFps, onResults }: HandTrackerProps) {
         muted
       />
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+
+      <button type="button" onClick={() => {
+        if (document.fullscreenElement) void document.exitFullscreen();
+        else void containerRef.current?.requestFullscreen();
+      }} className="absolute bottom-4 right-4 z-20 rounded-lg border border-white/20 bg-[#171514]/85 p-2.5 text-white shadow-lg backdrop-blur transition hover:bg-[#292522]" aria-label={fullscreen ? 'ออกจากเต็มจอ' : 'แสดงเต็มจอ'} title={fullscreen ? 'ออกจากเต็มจอ' : 'แสดงเต็มจอ'}>
+        {fullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
+      </button>
+
+      {activeImage && status === 'running' && !imageFailed && (
+        <img src={activeImage.src} alt={GESTURE_LABELS[activeImage.gesture]} onError={() => setImageFailed(true)} className="pointer-events-none absolute left-1/2 top-1/2 z-10 max-h-[34%] max-w-[34%] -translate-x-1/2 -translate-y-1/2 object-contain drop-shadow-[0_4px_18px_rgba(255,120,168,0.45)]" />
+      )}
 
       {status !== 'running' && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[#09090b]/90 px-6 text-center text-[#f2ede9]">
@@ -440,7 +495,7 @@ function distance(a: NormalizedLandmark, b: NormalizedLandmark) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function recognizeGesture(hand: NormalizedLandmark[]): HandGesture {
+function recognizeGesture(hand: NormalizedLandmark[], center: { x: number; y: number }): HandGesture {
   if (hand.length < 21) return 'none';
   const wrist = hand[0];
   const extended = [
@@ -458,6 +513,10 @@ function recognizeGesture(hand: NormalizedLandmark[]): HandGesture {
   const indexLength = distance(hand[8], wrist);
   const nearRightAngle = Math.abs(thumbIndexDot / Math.max(thumbLength * indexLength, 0.0001)) < 0.72;
 
+  if (middle && !index && !ring && !pinky) return 'middle-finger';
+  if (index && !middle && !ring && !pinky && !thumb) {
+    return center.x > 0.2 && center.x < 0.8 && center.y > 0.14 && center.y < 0.58 ? 'shush' : 'index-up';
+  }
   if (pinch && !middle && !ring && !pinky) return 'finger-heart';
   if (thumb && index && !middle && !ring && !pinky && nearRightAngle) return 'l-sign';
   if (index && middle && !ring && !pinky) return 'peace';
@@ -478,11 +537,11 @@ function handGestureCenter(hand: NormalizedLandmark[], gesture: HandGesture) {
 function drawHandBones(ctx: CanvasRenderingContext2D, hand: NormalizedLandmark[], width: number, height: number, lineWidth: number) {
   for (const group of HAND_CONNECTION_GROUPS) {
     ctx.beginPath();
-    ctx.strokeStyle = group.color;
+    ctx.strokeStyle = HAND_COLOR;
     ctx.lineWidth = lineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.shadowColor = group.color;
+    ctx.shadowColor = HAND_COLOR;
     ctx.shadowBlur = 2;
     for (const [start, end] of group.connections) {
       const a = hand[start];
@@ -500,8 +559,7 @@ function drawHandJoints(ctx: CanvasRenderingContext2D, hand: NormalizedLandmark[
   for (let index = 0; index < hand.length; index++) {
     const point = hand[index];
     if (!point) continue;
-    const finger = index === 0 ? -1 : Math.floor((index - 1) / 4);
-    const color = finger < 0 ? '#fff7ef' : FINGER_COLORS[finger];
+    const color = HAND_COLOR;
     const radius = size * ([4, 8, 12, 16, 20].includes(index) ? 1.15 : 0.8);
     ctx.beginPath();
     ctx.fillStyle = '#171514';
@@ -554,8 +612,8 @@ function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, width:
 
 function addGestureParticles(particles: Particle[], x: number, y: number, gesture: HandGesture) {
   const kind = gesture === 'finger-heart' ? 'heart' : 'spark';
-  const colors = kind === 'heart' ? ['#ff7899', '#ffb4a2', '#ffd166'] : ['#fff0b3', '#78d6c0', '#a8bfff'];
-  for (let index = 0; index < (kind === 'heart' ? 2 : 3); index++) {
+  const colors = ['#ff78a8', '#ffb4ce', '#ffe0ed'];
+  for (let index = 0; index < (kind === 'heart' ? 2 : 1); index++) {
     particles.push({
       x: x + (Math.random() - 0.5) * 0.04,
       y: y + (Math.random() - 0.5) * 0.035,
@@ -568,6 +626,19 @@ function addGestureParticles(particles: Particle[], x: number, y: number, gestur
     });
   }
   if (particles.length > 48) particles.splice(0, particles.length - 48);
+}
+
+function addPinkBurst(particles: Particle[], x: number, y: number) {
+  for (let index = 0; index < 34; index++) {
+    const angle = (Math.PI * 2 * index) / 34 + (Math.random() - 0.5) * 0.22;
+    const speed = 0.2 + Math.random() * 0.34;
+    particles.push({
+      x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+      size: 0.012 + Math.random() * 0.014, life: 1, kind: index % 3 === 0 ? 'heart' : 'burst',
+      color: ['#ff78a8', '#ffb4ce', '#ffe0ed'][index % 3],
+    });
+  }
+  if (particles.length > 100) particles.splice(0, particles.length - 100);
 }
 
 function advanceParticles(particles: Particle[], time: number, lastTimeRef: { current: number }) {

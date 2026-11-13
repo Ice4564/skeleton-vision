@@ -8,6 +8,7 @@ import {
   Eye,
   Hand,
   Heart,
+  Fingerprint,
   MousePointer2,
   Pause,
   Play,
@@ -31,6 +32,9 @@ const PRACTICE_GESTURES: { gesture: HandResult['gesture']; description: string; 
   { gesture: 'thumbs-up', description: 'ยกนิ้วโป้ง นิ้วอื่นกำไว้', icon: Zap },
   { gesture: 'open-hand', description: 'แบมือให้เห็นปลายนิ้วครบ', icon: Eye },
   { gesture: 'fist', description: 'กำมือเบา ๆ', icon: Activity },
+  { gesture: 'index-up', description: 'ชูนิ้วชี้เดี่ยว', icon: MousePointer2 },
+  { gesture: 'shush', description: 'ชูนิ้วชี้บริเวณกลางภาพ', icon: Fingerprint },
+  { gesture: 'middle-finger', description: 'ชูนิ้วกลาง นิ้วอื่นงอ', icon: Hand },
 ];
 
 export default function HandHome() {
@@ -187,8 +191,13 @@ export default function HandHome() {
                 <Range label="ขนาดจุด" value={settings.pointSize} min={3} max={9} onChange={(value) => update('pointSize', value)} />
                 <Range label="ความหนาเส้น" value={settings.lineWidth} min={1} max={6} onChange={(value) => update('lineWidth', value)} />
               </div>
-              <div className="mt-5 border-t border-white/[0.08] pt-4 text-xs leading-5 text-[#85807b]">
-                นิ้วหัวใจปล่อยรูปหัวใจเล็ก ๆ ส่วนท่า L และท่าอื่นจะมีประกายตามมือ
+              <div className="mt-5 border-t border-white/[0.08] pt-4 text-xs leading-5 text-[#aaa39d]">
+                กำมือแล้วแบมือเพื่อปล่อยประกายระเบิดสีชมพู · รูปท่ามือวางไว้ที่ <span className="text-[#ffb4ce]">public/gestures/</span>
+                <div className="mt-2 space-y-1 font-mono text-[11px] text-[#85807b]">
+                  <p>index.png — ชูนิ้วชี้</p>
+                  <p>shush.png — ชูนิ้วชี้กลางภาพ</p>
+                  <p>middle.png — ชูนิ้วกลาง</p>
+                </div>
               </div>
             </section>
 
