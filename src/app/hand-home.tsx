@@ -24,6 +24,7 @@ import {
   DEFAULT_GESTURE_IMAGES,
   GESTURE_LABELS,
   HandTracker,
+  TRACKING_EFFECTS,
   type HandImageLayout,
   type HandImageSources,
   type HandResult,
@@ -365,6 +366,27 @@ export default function HandHome() {
                 <Toggle label="เส้นข้อต่อมือ" checked={settings.showSkeleton} onChange={(value) => update('showSkeleton', value)} />
                 <Toggle label="จุดข้อต่อและปลายนิ้ว" checked={settings.showPoints} onChange={(value) => update('showPoints', value)} />
                 <Toggle label="เอฟเฟกต์ท่ามือ" checked={settings.showEffects} onChange={(value) => update('showEffects', value)} />
+                <div>
+                  <p className="mb-2 text-sm text-[#c7c0ba]">รูปแบบติดตามมือ</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {TRACKING_EFFECTS.map(({ style, label, description }) => (
+                      <button
+                        key={style}
+                        type="button"
+                        aria-pressed={settings.trackingStyle === style}
+                        onClick={() => update('trackingStyle', style)}
+                        className={`rounded-lg border px-2.5 py-2 text-left transition-colors ${settings.trackingStyle === style ? 'border-[#ff78a8]/60 bg-[#2a1d20]' : 'border-white/[0.07] bg-[#201d1b] hover:bg-[#292522]'}`}
+                      >
+                        <span className="block text-xs font-medium text-[#e3ddd7]">{label}</span>
+                        <span className="mt-1 block text-[10px] leading-4 text-[#85807b]">{description}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <label className="mt-3 flex items-center justify-between text-xs text-[#aaa39d]">
+                    สีหลัก (ลำแสงใช้สีรุ้ง)
+                    <input type="color" value={settings.trackingColor} onChange={(event) => update('trackingColor', event.target.value)} className="h-8 w-10 cursor-pointer rounded border border-white/15 bg-transparent p-0.5" />
+                  </label>
+                </div>
                 <Range label="ความแรงเอฟเฟกต์" value={settings.effectIntensity} min={0.5} max={2} step={0.1} onChange={(value) => update('effectIntensity', value)} />
                 <Range label="เวลาประกายค้าง (วินาที)" value={settings.effectDuration} min={0.5} max={2.5} step={0.1} onChange={(value) => update('effectDuration', value)} />
                 <Range
