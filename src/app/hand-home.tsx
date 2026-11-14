@@ -10,13 +10,16 @@ import {
   Heart,
   Fingerprint,
   ImagePlus,
+  MonitorPlay,
   MousePointer2,
   Pause,
   Play,
   RefreshCw,
+  RotateCcw,
   Settings2,
   Sparkles,
   Trash2,
+  Trophy,
   Zap,
 } from 'lucide-react';
 import {
@@ -24,7 +27,6 @@ import {
   DEFAULT_GESTURE_IMAGES,
   GESTURE_LABELS,
   HandTracker,
-  TRACKING_EFFECTS,
   type HandImageLayout,
   type HandImageSources,
   type HandResult,
@@ -45,6 +47,10 @@ const PRACTICE_GESTURES: { gesture: HandResult['gesture']; description: string; 
   { gesture: 'pinch', description: 'แตะปลายนิ้วโป้งกับนิ้วชี้', icon: Fingerprint },
 ];
 
+const CHALLENGE_GESTURES: HandResult['gesture'][] = [
+  'open-hand', 'fist', 'peace', 'thumbs-up', 'index-up', 'middle-finger', 'l-sign', 'finger-heart',
+];
+
 const DEFAULT_IMAGE_LAYOUT: HandImageLayout = { x: 58, y: 12, size: 38 };
 
 export default function HandHome() {
@@ -57,8 +63,18 @@ export default function HandHome() {
   const [layoutReady, setLayoutReady] = useState(false);
   const [uploadMessage, setUploadMessage] = useState('');
   const [selectedGesture, setSelectedGesture] = useState<HandResult['gesture'] | null>(null);
+  const [streamMode, setStreamMode] = useState(false);
+  const [airDrawMode, setAirDrawMode] = useState(false);
+  const [drawingColor, setDrawingColor] = useState('#ff78a8');
+  const [drawingWidth, setDrawingWidth] = useState(5);
+  const [clearDrawingToken, setClearDrawingToken] = useState(0);
+  const [challengeSequence, setChallengeSequence] = useState<HandResult['gesture'][]>([]);
+  const [challengeStep, setChallengeStep] = useState(0);
+  const [challengeActive, setChallengeActive] = useState(false);
+  const [challengeComplete, setChallengeComplete] = useState(false);
   const lastUpdateRef = useRef(0);
   const imageUrlsRef = useRef<HandImageSources>({});
+  const challengeStreakRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -107,6 +123,26 @@ export default function HandHome() {
       // Layout controls remain available for this session without browser storage.
     }
   }, [imageLayout, layoutReady]);
+
+  useEffect(() => {
+    if (!challengeActive || !challengeSequence[challengeStep]) return;
+    const target = challengeSequence[challengeStep];
+    if (gestures.some((item) => item.gesture === target)) {
+      challengeStreakRef.current += 1;
+      if (challengeStreakRef.current >= 2) {
+        challengeStreakRef.current = 0;
+        if (challengeStep + 1 >= challengeSequence.length) {
+          setChallengeStep(challengeSequence.length);
+          setChallengeActive(false);
+          setChallengeComplete(true);
+        } else {
+          setChallengeStep((step) => step + 1);
+        }
+      }
+    } else {
+      challengeStreakRef.current = 0;
+    }
+  }, [gestures, challengeActive, challengeSequence, challengeStep]);
 
   const handleResults = useCallback((result: { count: number; gestures: HandResult[] }) => {
     const now = performance.now();
@@ -158,13 +194,27 @@ export default function HandHome() {
     }
   };
 
+  const startChallenge = () => {
+    const pool = [...CHALLENGE_GESTURES];
+    for (let index = pool.length - 1; index > 0; index--) {
+      const swapIndex = Math.floor(Math.random() * (index + 1));
+      [pool[index], pool[swapIndex]] = [pool[swapIndex], pool[index]];
+    }
+    setChallengeSequence(pool.slice(0, 3));
+    setChallengeStep(0);
+    setChallengeComplete(false);
+    setChallengeActive(true);
+    challengeStreakRef.current = 0;
+    if (!settings.enabled) update('enabled', true);
+  };
+
   const activeHands = gestures.filter((item) => item.gesture !== 'none');
   const activeGesture = activeHands[0]?.gesture;
   const selectedGestureFound = selectedGesture !== null && activeHands.some((item) => item.gesture === selectedGesture);
 
   return (
-    <div className="min-h-screen bg-[#12110f] text-[#f2ede9]">
-      <header className="border-b border-white/[0.08] bg-[#12110f]">
+    <div className={`min-h-screen bg-[#12110f] text-[#f2ede9] ${streamMode ? 'overflow-hidden bg-black' : ''}`}>
+      <header className={`${streamMode ? 'hidden' : 'border-b border-white/[0.08] bg-[#12110f]'}`}>
         <div className="mx-auto flex max-w-[1440px] items-center justify-between px-4 py-4 sm:px-8">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-[#201d1b] text-[#ff7899]">
@@ -182,8 +232,8 @@ export default function HandHome() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1440px] px-4 py-7 sm:px-8 sm:py-10">
-        <div className="mb-6 flex flex-col justify-between gap-4 sm:mb-8 sm:flex-row sm:items-end">
+      <main className={`${streamMode ? 'fixed inset-0 z-[100] h-[100dvh] w-screen max-w-none overflow-hidden bg-black p-0' : 'mx-auto max-w-[1440px] px-4 py-7 sm:px-8 sm:py-10'}`}>
+        {!streamMode && <div className="mb-6 flex flex-col justify-between gap-4 sm:mb-8 sm:flex-row sm:items-end">
           <div>
             <p className="mb-2 text-sm text-[#aaa39d]">สตูดิโอท่ามือ</p>
             <h1 className="text-2xl font-medium tracking-tight sm:text-3xl">เส้นมือของคุณ ขยับตามจริง</h1>
@@ -195,11 +245,11 @@ export default function HandHome() {
             <Activity className="h-4 w-4" />
             <span className="tabular-nums text-[#f2ede9]">{fps.toFixed(0)}</span> FPS
           </div>
-        </div>
+        </div>}
 
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.55fr)_minmax(300px,0.7fr)] lg:gap-6">
-          <section className="min-w-0 rounded-2xl border border-white/[0.08] bg-[#191816] p-3 sm:p-4" aria-label="ภาพติดตามมือ">
-            <div className="mb-3 flex items-center justify-between px-1">
+        <div className={`${streamMode ? 'h-full' : 'grid gap-5 lg:grid-cols-[minmax(0,1.55fr)_minmax(300px,0.7fr)] lg:gap-6'}`}>
+          <section className={`${streamMode ? 'h-full min-w-0 bg-black' : 'min-w-0 rounded-2xl border border-white/[0.08] bg-[#191816] p-3 sm:p-4'}`} aria-label="ภาพติดตามมือ">
+            {!streamMode && <div className="mb-3 flex items-center justify-between px-1">
               <div>
                 <h2 className="text-sm font-medium">มุมมองสด</h2>
                 <p className="mt-1 text-xs text-[#85807b]">ยกมือให้กล้องเห็นทั้งฝ่ามือและปลายนิ้ว</p>
@@ -207,7 +257,7 @@ export default function HandHome() {
               <span className="rounded-md border border-white/10 bg-[#201d1b] px-2.5 py-1.5 text-xs tabular-nums text-[#c7c0ba]">
                 {handCount} / 2 มือ
               </span>
-            </div>
+            </div>}
 
             <HandTracker
               settings={settings}
@@ -215,6 +265,12 @@ export default function HandHome() {
               onResults={handleResults}
               imageSources={imageSources}
               imageLayout={imageLayout}
+              streamMode={streamMode}
+              onToggleStreamMode={() => setStreamMode(false)}
+              airDrawMode={airDrawMode}
+              drawingColor={drawingColor}
+              drawingWidth={drawingWidth}
+              clearDrawingToken={clearDrawingToken}
               onImageLayoutChange={(next) => setImageLayout({
                 ...next,
                 x: Math.min(next.x, 100 - next.size),
@@ -222,7 +278,7 @@ export default function HandHome() {
               })}
             />
 
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            {!streamMode && <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => {
@@ -249,16 +305,60 @@ export default function HandHome() {
               <SmallButton onClick={() => update('showVideo', !settings.showVideo)} icon={<Camera className="h-4 w-4" />}>
                 ภาพ {settings.showVideo ? 'เปิด' : 'ปิด'}
               </SmallButton>
-            </div>
+              <SmallButton onClick={() => { setStreamMode(true); if (!settings.enabled) update('enabled', true); }} icon={<MonitorPlay className="h-4 w-4" />}>
+                โหมดสตรีม
+              </SmallButton>
+              <SmallButton onClick={() => setAirDrawMode((current) => !current)} icon={<Fingerprint className="h-4 w-4" />}>
+                วาดกลางอากาศ {airDrawMode ? 'เปิด' : 'ปิด'}
+              </SmallButton>
+              {airDrawMode && <SmallButton onClick={() => setClearDrawingToken((current) => current + 1)} icon={<Trash2 className="h-4 w-4" />}>ล้างเส้น</SmallButton>}
+            </div>}
 
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {!streamMode && <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
               <Metric label="มือที่พบ" value={`${handCount}`} detail="จากกล้องสด" />
               <Metric label="ท่าที่กำลังทำ" value={activeGesture ? GESTURE_LABELS[activeGesture] : '—'} detail={activeHands[0]?.side ?? 'ยังไม่พบท่ามือ'} />
               <Metric label="โครงมือ" value="21 จุด / มือ" detail="ข้อมือ ข้อนิ้ว และปลายนิ้ว" />
-            </div>
+            </div>}
           </section>
 
-          <aside className="flex flex-col gap-5">
+          {!streamMode && <aside className="flex flex-col gap-5">
+            <section className="rounded-2xl border border-white/[0.08] bg-[#191816] p-5">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2a1d20] text-[#ffb4ce]">
+                  <Trophy className="h-5 w-5" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-medium">ชาเลนจ์ท่ามือ</h2>
+                  <p className="mt-1 text-xs leading-5 text-[#85807b]">ทำท่าที่สุ่มให้ครบ 3 ท่า กล้องต้องจับแต่ละท่าให้ได้ก่อนถึงจะไปต่อ</p>
+                </div>
+              </div>
+              {challengeSequence.length > 0 && (
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  {challengeSequence.map((gesture, index) => {
+                    const done = index < challengeStep;
+                    const current = challengeActive && index === challengeStep;
+                    return (
+                      <div key={`${gesture}-${index}`} className={`rounded-xl border px-2 py-3 text-center ${done ? 'border-[#70d6b5]/40 bg-[#19231f]' : current ? 'border-[#ff78a8]/50 bg-[#2a1d20]' : 'border-white/[0.07] bg-[#201d1b]'}`}>
+                        <span className={`mx-auto flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold ${done ? 'bg-[#70d6b5] text-[#15211c]' : current ? 'bg-[#ff78a8] text-[#2a111a]' : 'bg-[#302c29] text-[#aaa39d]'}`}>
+                          {done ? '✓' : index + 1}
+                        </span>
+                        <p className="mt-2 text-[11px] leading-4 text-[#e3ddd7]">{GESTURE_LABELS[gesture]}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <p aria-live="polite" className={`text-xs ${challengeComplete ? 'text-[#70d6b5]' : 'text-[#aaa39d]'}`}>
+                  {challengeComplete ? 'ครบแล้ว เก่งมาก! 🎉' : challengeActive ? `ทำท่า${GESTURE_LABELS[challengeSequence[challengeStep]]}ค้างไว้แป๊บหนึ่ง` : 'พร้อมเริ่มเมื่อไหร่ก็ได้'}
+                </p>
+                <button type="button" onClick={startChallenge} className="inline-flex h-10 shrink-0 items-center gap-2 rounded-lg bg-[#ff7899] px-3 text-xs font-medium text-[#2a111a] transition hover:bg-[#ff94ac]">
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  {challengeActive ? 'สุ่มใหม่' : challengeComplete ? 'เล่นอีกครั้ง' : 'เริ่มชาเลนจ์'}
+                </button>
+              </div>
+            </section>
+
             <section className="rounded-2xl border border-white/[0.08] bg-[#191816] p-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -366,27 +466,18 @@ export default function HandHome() {
                 <Toggle label="เส้นข้อต่อมือ" checked={settings.showSkeleton} onChange={(value) => update('showSkeleton', value)} />
                 <Toggle label="จุดข้อต่อและปลายนิ้ว" checked={settings.showPoints} onChange={(value) => update('showPoints', value)} />
                 <Toggle label="เอฟเฟกต์ท่ามือ" checked={settings.showEffects} onChange={(value) => update('showEffects', value)} />
-                <div>
-                  <p className="mb-2 text-sm text-[#c7c0ba]">รูปแบบติดตามมือ</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {TRACKING_EFFECTS.map(({ style, label, description }) => (
-                      <button
-                        key={style}
-                        type="button"
-                        aria-pressed={settings.trackingStyle === style}
-                        onClick={() => update('trackingStyle', style)}
-                        className={`rounded-lg border px-2.5 py-2 text-left transition-colors ${settings.trackingStyle === style ? 'border-[#ff78a8]/60 bg-[#2a1d20]' : 'border-white/[0.07] bg-[#201d1b] hover:bg-[#292522]'}`}
-                      >
-                        <span className="block text-xs font-medium text-[#e3ddd7]">{label}</span>
-                        <span className="mt-1 block text-[10px] leading-4 text-[#85807b]">{description}</span>
-                      </button>
-                    ))}
+                <Toggle label="วาดกลางอากาศด้วยนิ้วชี้" checked={airDrawMode} onChange={setAirDrawMode} />
+                {airDrawMode && (
+                  <div className="space-y-3 rounded-xl border border-white/[0.07] bg-[#201d1b] p-3">
+                    <p className="text-xs leading-5 text-[#aaa39d]">ยกนิ้วชี้เดี่ยวแล้วลากมือเพื่อวาด · กำมือเพื่อหยุดลากเส้น</p>
+                    <label className="flex items-center justify-between text-xs text-[#aaa39d]">
+                      สีเส้นวาด
+                      <input type="color" value={drawingColor} onChange={(event) => setDrawingColor(event.target.value)} className="h-8 w-10 cursor-pointer rounded border border-white/15 bg-transparent p-0.5" />
+                    </label>
+                    <Range label="ความหนาเส้นวาด" value={drawingWidth} min={2} max={14} onChange={setDrawingWidth} />
+                    <button type="button" onClick={() => setClearDrawingToken((current) => current + 1)} className="text-xs text-[#ffb4ce] hover:text-white">ล้างภาพวาด</button>
                   </div>
-                  <label className="mt-3 flex items-center justify-between text-xs text-[#aaa39d]">
-                    สีหลัก (ลำแสงใช้สีรุ้ง)
-                    <input type="color" value={settings.trackingColor} onChange={(event) => update('trackingColor', event.target.value)} className="h-8 w-10 cursor-pointer rounded border border-white/15 bg-transparent p-0.5" />
-                  </label>
-                </div>
+                )}
                 <Range label="ความแรงเอฟเฟกต์" value={settings.effectIntensity} min={0.5} max={2} step={0.1} onChange={(value) => update('effectIntensity', value)} />
                 <Range label="เวลาประกายค้าง (วินาที)" value={settings.effectDuration} min={0.5} max={2.5} step={0.1} onChange={(value) => update('effectDuration', value)} />
                 <Range
@@ -415,7 +506,7 @@ export default function HandHome() {
             <p className="px-1 text-xs leading-5 text-[#77716c]">
               ประมวลผลภาพในเบราว์เซอร์ · กล้องมือถือใช้กับคอมได้เมื่อเชื่อมเป็นเว็บแคมก่อน
             </p>
-          </aside>
+          </aside>}
         </div>
       </main>
     </div>

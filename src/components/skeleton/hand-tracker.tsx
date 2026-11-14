@@ -8,12 +8,12 @@ import {
   type NormalizedLandmark,
 } from '@mediapipe/tasks-vision';
 import { HAND_CONNECTION_GROUPS } from '@/lib/hand-connections';
-import { Maximize2, Minimize2 } from 'lucide-react';
+import { Camera, Maximize2, Minimize2, MonitorPlay, X } from 'lucide-react';
 
 export type HandGesture = 'finger-heart' | 'l-sign' | 'peace' | 'thumbs-up' | 'open-hand' | 'fist' | 'pinch' | 'index-up' | 'shush' | 'middle-finger' | 'none';
-export type TrackingEffectStyle = 'neon-trail' | 'rainbow-beam' | 'orbit' | 'geo-frame' | 'scan-line' | 'soft-glow' | 'off';
 export type HandImageSources = Partial<Record<HandGesture, string>>;
 export interface HandImageLayout { x: number; y: number; size: number }
+interface InkPath { points: { x: number; y: number }[]; color: string; width: number }
 
 export interface HandResult {
   side: string;
@@ -31,8 +31,6 @@ export interface HandTrackerSettings {
   lineWidth: number;
   effectIntensity: number;
   effectDuration: number;
-  trackingStyle: TrackingEffectStyle;
-  trackingColor: string;
   minDetectionConfidence: number;
   minTrackingConfidence: number;
 }
@@ -48,8 +46,6 @@ export const DEFAULT_HAND_SETTINGS: HandTrackerSettings = {
   lineWidth: 3,
   effectIntensity: 1,
   effectDuration: 1.2,
-  trackingStyle: 'neon-trail',
-  trackingColor: '#ff78a8',
   minDetectionConfidence: 0.45,
   minTrackingConfidence: 0.45,
 };
@@ -61,6 +57,12 @@ interface HandTrackerProps {
   imageSources?: HandImageSources;
   imageLayout?: HandImageLayout;
   onImageLayoutChange?: (layout: HandImageLayout) => void;
+  streamMode?: boolean;
+  onToggleStreamMode?: () => void;
+  airDrawMode?: boolean;
+  drawingColor?: string;
+  drawingWidth?: number;
+  clearDrawingToken?: number;
 }
 
 type ModelState =
@@ -103,17 +105,7 @@ export const GESTURE_LABELS: Record<HandGesture, string> = {
   none: '',
 };
 
-export const TRACKING_EFFECTS: { style: TrackingEffectStyle; label: string; description: string }[] = [
-  { style: 'neon-trail', label: 'เส้นตามนิ้ว', description: 'เส้นนีออนลากตามปลายนิ้ว' },
-  { style: 'rainbow-beam', label: 'ลำแสง', description: 'ลำแสงสามเหลี่ยมสีรุ้ง' },
-  { style: 'orbit', label: 'วงโคจร', description: 'วงแสงหมุนรอบฝ่ามือ' },
-  { style: 'geo-frame', label: 'กรอบเรขาคณิต', description: 'กรอบเรืองแสงล้อมมือ' },
-  { style: 'scan-line', label: 'สแกน', description: 'เส้นสแกนวิ่งผ่านมือ' },
-  { style: 'soft-glow', label: 'ออร่า', description: 'วงออร่านุ่มรอบฝ่ามือ' },
-  { style: 'off', label: 'ปิด', description: 'ซ่อนเอฟเฟกต์ติดตาม' },
-];
-
-export function HandTracker({ settings, onFps, onResults, imageSources = {}, imageLayout = { x: 58, y: 12, size: 38 }, onImageLayoutChange }: HandTrackerProps) {
+export function HandTracker({ settings, onFps, onResults, imageSources = {}, imageLayout = { x: 58, y: 12, size: 38 }, onImageLayoutChange, streamMode = false, onToggleStreamMode, airDrawMode = false, drawingColor = '#ff78a8', drawingWidth = 5, clearDrawingToken = 0 }: HandTrackerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const backdropVideoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -128,6 +120,12 @@ export function HandTracker({ settings, onFps, onResults, imageSources = {}, ima
   imageSourcesRef.current = imageSources;
   const imageLayoutRef = useRef(imageLayout);
   imageLayoutRef.current = imageLayout;
+  const airDrawModeRef = useRef(airDrawMode);
+  airDrawModeRef.current = airDrawMode;
+  const drawingColorRef = useRef(drawingColor);
+  drawingColorRef.current = drawingColor;
+  const drawingWidthRef = useRef(drawingWidth);
+  drawingWidthRef.current = drawingWidth;
   const previousHandsRef = useRef<Map<string, NormalizedLandmark[]>>(new Map());
   const particlesRef = useRef<Particle[]>([]);
   const cachedHandsRef = useRef<NormalizedLandmark[][]>([]);
@@ -150,7 +148,8 @@ export function HandTracker({ settings, onFps, onResults, imageSources = {}, ima
   const activeImageSourceRef = useRef<string | null>(null);
   const pendingImageChangeRef = useRef<{ key: string; since: number } | null>(null);
   const imageDragRef = useRef<{ offsetX: number; offsetY: number } | null>(null);
-  const handTrailsRef = useRef<Map<string, { x: number; y: number }[]>>(new Map());
+  const inkPathsRef = useRef<InkPath[]>([]);
+  const activeInkPathRef = useRef<InkPath | null>(null);
 
   useEffect(() => {
     const updateFullscreen = () => setFullscreen(document.fullscreenElement === containerRef.current);
@@ -182,6 +181,11 @@ export function HandTracker({ settings, onFps, onResults, imageSources = {}, ima
     void applyCameraZoom();
     return () => { cancelled = true; };
   }, [cameraZoom, status]);
+
+  useEffect(() => {
+    inkPathsRef.current = [];
+    activeInkPathRef.current = null;
+  }, [clearDrawingToken]);
 
   useEffect(() => () => {
     if (modelRef.current.type === 'ready') {
@@ -383,6 +387,30 @@ export function HandTracker({ settings, onFps, onResults, imageSources = {}, ima
           cachedHandsRef.current = landmarks;
           cachedGesturesRef.current = gestures;
 
+          if (airDrawModeRef.current) {
+            const drawingHandIndex = gestures.findIndex(({ gesture }) => gesture === 'index-up');
+            const drawingTip = drawingHandIndex >= 0 ? landmarks[drawingHandIndex]?.[8] : undefined;
+            if (drawingTip) {
+              let path = activeInkPathRef.current;
+              if (!path) {
+                path = { points: [], color: drawingColorRef.current, width: drawingWidthRef.current };
+                inkPathsRef.current.push(path);
+                if (inkPathsRef.current.length > 12) inkPathsRef.current.shift();
+                activeInkPathRef.current = path;
+              }
+              const previous = path.points[path.points.length - 1];
+              if (!previous || Math.hypot((drawingTip.x - previous.x) * viewport.width, (drawingTip.y - previous.y) * viewport.height) > 2) {
+                path.points.push({ x: drawingTip.x, y: drawingTip.y });
+                if (path.points.length > 500) path.points.splice(0, path.points.length - 500);
+              }
+            } else {
+              activeInkPathRef.current = null;
+            }
+          } else {
+            activeInkPathRef.current = null;
+          }
+          drawInkPaths(ctx, inkPathsRef.current, viewport.width, viewport.height);
+
           const detectedGesture = gestures.find(({ gesture }) => imageSourcesRef.current[gesture] || DEFAULT_GESTURE_IMAGES[gesture])?.gesture
             ?? gestures.find(({ gesture }) => gesture !== 'none')?.gesture
             ?? null;
@@ -428,19 +456,6 @@ export function HandTracker({ settings, onFps, onResults, imageSources = {}, ima
           for (let index = 0; index < landmarks.length; index++) {
             const hand = landmarks[index];
             const gesture = gestures[index]?.gesture ?? 'none';
-            if (options.showEffects && options.trackingStyle !== 'off') {
-              drawTrackingEffect(
-                ctx,
-                hand,
-                viewport.width,
-                viewport.height,
-                options.trackingStyle,
-                options.trackingColor,
-                time,
-                `${sides[index] || index}`,
-                handTrailsRef.current,
-              );
-            }
             if (options.showSkeleton) drawHandBones(ctx, hand, viewport.width, viewport.height, options.lineWidth);
             if (options.showPoints) drawHandJoints(ctx, hand, viewport.width, viewport.height, options.pointSize);
             if (gesture !== 'none') {
@@ -530,6 +545,59 @@ export function HandTracker({ settings, onFps, onResults, imageSources = {}, ima
   }, [settings.enabled, deviceId, loadHandModel, onFps, onResults]);
 
   const switchCamera = useCallback((nextDeviceId: string) => setDeviceId(nextDeviceId), []);
+  const captureScreenshot = async () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!video || !canvas || !container || video.readyState < 2) return;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    const output = document.createElement('canvas');
+    output.width = width;
+    output.height = height;
+    const ctx = output.getContext('2d');
+    if (!ctx) return;
+    ctx.fillStyle = '#09090b';
+    ctx.fillRect(0, 0, width, height);
+
+    const coverScale = Math.max(width / video.videoWidth, height / video.videoHeight);
+    const coverWidth = video.videoWidth * coverScale;
+    const coverHeight = video.videoHeight * coverScale;
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.drawImage(video, (width - coverWidth) / 2, (height - coverHeight) / 2, coverWidth, coverHeight);
+    ctx.restore();
+
+    const viewport = fitVideo(video, width, height);
+    ctx.save();
+    if (settings.mirror) {
+      ctx.translate(viewport.x + viewport.width, viewport.y);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, 0, 0, viewport.width, viewport.height);
+    } else {
+      ctx.drawImage(video, viewport.x, viewport.y, viewport.width, viewport.height);
+    }
+    ctx.restore();
+    ctx.drawImage(canvas, 0, 0, width, height);
+
+    const image = container.querySelector<HTMLImageElement>('[data-gesture-overlay="true"]');
+    if (image?.complete && image.naturalWidth > 0) {
+      const boxX = imageLayout.x * width / 100;
+      const boxY = imageLayout.y * height / 100;
+      const boxWidth = imageLayout.size * width / 100;
+      const boxHeight = imageLayout.size * height / 100;
+      const imageScale = Math.min(boxWidth / image.naturalWidth, boxHeight / image.naturalHeight);
+      const imageWidth = image.naturalWidth * imageScale;
+      const imageHeight = image.naturalHeight * imageScale;
+      ctx.drawImage(image, boxX + (boxWidth - imageWidth) / 2, boxY + (boxHeight - imageHeight) / 2, imageWidth, imageHeight);
+    }
+
+    const link = document.createElement('a');
+    link.download = `hand-capture-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+    link.href = output.toDataURL('image/png');
+    link.click();
+    setMessage('บันทึกภาพหน้าจอแล้ว');
+  };
   const startImageDrag = (event: ReactPointerEvent<HTMLImageElement>) => {
     event.preventDefault();
     const rect = event.currentTarget.getBoundingClientRect();
@@ -547,7 +615,7 @@ export function HandTracker({ settings, onFps, onResults, imageSources = {}, ima
   };
 
   return (
-    <div ref={containerRef} className={`relative aspect-[3/4] w-full overflow-hidden rounded-[20px] bg-[#09090b] sm:aspect-[4/3] ${fullscreen ? 'fixed inset-0 z-[9999] h-[100dvh] w-screen max-h-none max-w-none rounded-none !aspect-auto' : ''}`}>
+    <div ref={containerRef} className={`relative aspect-[3/4] w-full overflow-hidden rounded-[20px] bg-[#09090b] sm:aspect-[4/3] ${streamMode || fullscreen ? 'h-full w-full rounded-none !aspect-auto' : ''} ${fullscreen ? 'fixed inset-0 z-[9999] h-[100dvh] w-screen max-h-none max-w-none' : ''}`}>
       <video
         ref={backdropVideoRef}
         className="absolute inset-0 h-full w-full scale-110 object-cover blur-2xl"
@@ -565,7 +633,13 @@ export function HandTracker({ settings, onFps, onResults, imageSources = {}, ima
       />
       <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
 
-      {status === 'running' && (
+      {airDrawMode && status === 'running' && (
+        <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-lg border border-white/15 bg-[#171514]/85 px-3 py-2 text-center text-xs text-white shadow-lg backdrop-blur">
+          ยกนิ้วชี้เพื่อวาด · กำมือเพื่อหยุด
+        </div>
+      )}
+
+      {status === 'running' && !streamMode && (
         <label className="absolute left-4 top-4 z-10 flex items-center gap-2 rounded-lg border border-white/15 bg-[#171514]/90 px-3 py-2 text-xs text-white shadow-lg backdrop-blur">
           <span className="whitespace-nowrap">{zoomSupported ? `ซูม ${cameraZoom.toFixed(2)}×` : 'กล้องนี้ไม่มีซูม 0.5×'}</span>
           <input
@@ -599,9 +673,26 @@ export function HandTracker({ settings, onFps, onResults, imageSources = {}, ima
         {fullscreen ? <Minimize2 className="h-5 w-5" /> : <Maximize2 className="h-5 w-5" />}
       </button>
 
+      {status === 'running' && (
+        <button type="button" onClick={() => void captureScreenshot()} className="absolute bottom-4 right-16 z-20 rounded-lg border border-white/20 bg-[#171514]/85 p-2.5 text-white shadow-lg backdrop-blur transition hover:bg-[#292522]" aria-label="ถ่ายภาพหน้าจอ" title="ถ่ายภาพหน้าจอ">
+          <Camera className="h-5 w-5" />
+        </button>
+      )}
+
+      {streamMode && onToggleStreamMode && (
+        <button type="button" onClick={() => {
+          if (document.fullscreenElement === containerRef.current) void document.exitFullscreen();
+          setFullscreen(false);
+          onToggleStreamMode();
+        }} className="absolute left-4 top-4 z-20 rounded-lg border border-white/20 bg-[#171514]/85 p-2.5 text-white shadow-lg backdrop-blur transition hover:bg-[#292522]" aria-label="ออกจากโหมดสตรีม" title="ออกจากโหมดสตรีม">
+          <X className="h-5 w-5" />
+        </button>
+      )}
+
       {activeImage && status === 'running' && !imageFailed && (
         <img
           src={activeImage.src}
+          data-gesture-overlay="true"
           alt={GESTURE_LABELS[activeImage.gesture]}
           draggable={false}
           onError={() => setImageFailed(true)}
@@ -782,145 +873,25 @@ function drawHandBones(ctx: CanvasRenderingContext2D, hand: NormalizedLandmark[]
   ctx.shadowBlur = 0;
 }
 
-function drawTrackingEffect(
-  ctx: CanvasRenderingContext2D,
-  hand: NormalizedLandmark[],
-  width: number,
-  height: number,
-  style: TrackingEffectStyle,
-  color: string,
-  time: number,
-  handKey: string,
-  trails: Map<string, { x: number; y: number }[]>,
-) {
-  const wrist = hand[0];
-  const palm = hand[9];
-  if (!wrist || !palm) return;
-  const palmWidth = Math.max(12, distance(hand[5], hand[17]) * width);
-  const palmCenter = {
-    x: (hand[0].x + hand[5].x + hand[9].x + hand[13].x + hand[17].x) / 5 * width,
-    y: (hand[0].y + hand[5].y + hand[9].y + hand[13].y + hand[17].y) / 5 * height,
-  };
-  const points = hand.map((point) => ({ x: point.x * width, y: point.y * height }));
-  const bounds = points.reduce((box, point) => ({
-    left: Math.min(box.left, point.x),
-    right: Math.max(box.right, point.x),
-    top: Math.min(box.top, point.y),
-    bottom: Math.max(box.bottom, point.y),
-  }), { left: width, right: 0, top: height, bottom: 0 });
-  const margin = palmWidth * 0.35;
-
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.shadowColor = color;
-  ctx.shadowBlur = 18;
-
-  if (style === 'rainbow-beam') {
-    const tip = points[8];
-    if (tip) {
-      const dx = tip.x - points[0].x;
-      const dy = tip.y - points[0].y;
-      const length = Math.max(1, Math.hypot(dx, dy));
-      const ux = dx / length;
-      const uy = dy / length;
-      const endX = tip.x + ux * length * 1.7;
-      const endY = tip.y + uy * length * 1.7;
-      const halfWidth = palmWidth * 0.72;
-      const gradient = ctx.createLinearGradient(points[0].x, points[0].y, endX, endY);
-      gradient.addColorStop(0, 'rgba(255, 85, 150, 0.05)');
-      gradient.addColorStop(0.26, '#ff4f93');
-      gradient.addColorStop(0.48, '#ffd166');
-      gradient.addColorStop(0.68, '#70d6b5');
-      gradient.addColorStop(0.84, '#78a9ff');
-      gradient.addColorStop(1, '#d28bff');
-      ctx.beginPath();
-      ctx.moveTo(points[0].x, points[0].y);
-      ctx.lineTo(endX - uy * halfWidth, endY + ux * halfWidth);
-      ctx.lineTo(endX + uy * halfWidth, endY - ux * halfWidth);
-      ctx.closePath();
-      ctx.globalAlpha = 0.42;
-      ctx.fillStyle = gradient;
-      ctx.fill();
-    }
-  } else if (style === 'neon-trail') {
-    for (const tipIndex of [4, 8, 12, 16, 20]) {
-      const tip = hand[tipIndex];
-      if (!tip) continue;
-      const key = `${handKey}:${tipIndex}`;
-      const trail = trails.get(key) ?? [];
-      trail.push({ x: tip.x, y: tip.y });
-      if (trail.length > 28) trail.splice(0, trail.length - 28);
-      trails.set(key, trail);
-    }
-    for (const tipIndex of [4, 8, 12, 16, 20]) {
-      const trail = trails.get(`${handKey}:${tipIndex}`);
-      if (!trail || trail.length < 2) continue;
-      for (let index = 1; index < trail.length; index++) {
-        ctx.beginPath();
-        ctx.moveTo(trail[index - 1].x * width, trail[index - 1].y * height);
-        ctx.lineTo(trail[index].x * width, trail[index].y * height);
-        ctx.globalAlpha = (index / trail.length) * 0.78;
-        ctx.lineWidth = 1.5 + (index / trail.length) * 4;
-        ctx.strokeStyle = color;
-        ctx.stroke();
-      }
-    }
-  } else if (style === 'orbit') {
-    const radius = palmWidth * (1.05 + Math.sin(time / 240) * 0.08);
-    ctx.translate(palmCenter.x, palmCenter.y);
-    for (let index = 0; index < 3; index++) {
-      ctx.save();
-      ctx.rotate(time / 900 + index * Math.PI / 3);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, radius, radius * (0.42 + index * 0.08), 0, 0, Math.PI * 2);
-      ctx.globalAlpha = 0.48;
-      ctx.lineWidth = 2.2;
-      ctx.strokeStyle = index === 1 ? '#ffb4ce' : color;
-      ctx.stroke();
-      const angle = time / 300 + index * (Math.PI * 2 / 3);
-      ctx.beginPath();
-      ctx.arc(Math.cos(angle) * radius, Math.sin(angle) * radius * 0.5, 4 + (index % 2), 0, Math.PI * 2);
-      ctx.globalAlpha = 0.95;
-      ctx.fillStyle = index === 2 ? '#fff0f5' : color;
-      ctx.fill();
-      ctx.restore();
-    }
-  } else if (style === 'geo-frame') {
+function drawInkPaths(ctx: CanvasRenderingContext2D, paths: InkPath[], width: number, height: number) {
+  for (const path of paths) {
+    if (path.points.length < 2) continue;
+    ctx.save();
     ctx.beginPath();
-    roundedRect(ctx, bounds.left - margin, bounds.top - margin, bounds.right - bounds.left + margin * 2, bounds.bottom - bounds.top + margin * 2, palmWidth * 0.3);
-    ctx.globalAlpha = 0.72;
-    ctx.lineWidth = 2.5;
-    ctx.setLineDash([palmWidth * 0.2, palmWidth * 0.1]);
-    ctx.strokeStyle = color;
-    ctx.stroke();
-    ctx.setLineDash([]);
-  } else if (style === 'scan-line') {
-    const y = bounds.top - margin + ((time % 1500) / 1500) * (bounds.bottom - bounds.top + margin * 2);
-    ctx.beginPath();
-    ctx.moveTo(bounds.left - margin, y);
-    ctx.lineTo(bounds.right + margin, y);
+    ctx.moveTo(path.points[0].x * width, path.points[0].y * height);
+    for (let index = 1; index < path.points.length; index++) {
+      ctx.lineTo(path.points[index].x * width, path.points[index].y * height);
+    }
+    ctx.strokeStyle = path.color;
+    ctx.lineWidth = path.width;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.shadowColor = path.color;
+    ctx.shadowBlur = 8;
     ctx.globalAlpha = 0.9;
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = color;
     ctx.stroke();
-    ctx.beginPath();
-    roundedRect(ctx, bounds.left - margin, bounds.top - margin, bounds.right - bounds.left + margin * 2, bounds.bottom - bounds.top + margin * 2, palmWidth * 0.25);
-    ctx.globalAlpha = 0.35;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-  } else if (style === 'soft-glow') {
-    const radius = palmWidth * (1.8 + Math.sin(time / 300) * 0.12);
-    const glow = ctx.createRadialGradient(palmCenter.x, palmCenter.y, palmWidth * 0.15, palmCenter.x, palmCenter.y, radius);
-    glow.addColorStop(0, `${color}55`);
-    glow.addColorStop(1, `${color}00`);
-    ctx.beginPath();
-    ctx.arc(palmCenter.x, palmCenter.y, radius, 0, Math.PI * 2);
-    ctx.globalAlpha = 0.7;
-    ctx.fillStyle = glow;
-    ctx.fill();
+    ctx.restore();
   }
-  ctx.restore();
 }
 
 function drawHandJoints(ctx: CanvasRenderingContext2D, hand: NormalizedLandmark[], width: number, height: number, size: number) {
