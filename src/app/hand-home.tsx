@@ -10,6 +10,7 @@ import {
   Heart,
   Fingerprint,
   ImagePlus,
+  Info,
   MonitorPlay,
   MousePointer2,
   Pause,
@@ -503,12 +504,56 @@ export default function HandHome() {
               </p>
             </section>
 
+            <section className="rounded-2xl border border-white/[0.08] bg-[#191816] p-4 sm:p-5">
+              <details className="group">
+                <summary className="flex cursor-pointer list-none items-center gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#22201e] text-[#ffb4ce]">
+                    <Info className="h-[18px] w-[18px]" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium">วิธีใช้และสถานะระบบ</span>
+                    <span className="mt-1 block text-xs text-[#85807b]">
+                      {settings.enabled
+                        ? handCount > 0 ? `กล้องทำงาน · พบ ${handCount} มือ` : 'กล้องเปิดอยู่ · กำลังรอมือในภาพ'
+                        : 'กล้องพักอยู่ · กด “เริ่มจับมือ” เพื่อเริ่ม'}
+                    </span>
+                  </span>
+                  <span className="text-xs text-[#aaa39d] group-open:hidden">ดู</span>
+                  <span className="hidden text-xs text-[#aaa39d] group-open:inline">ซ่อน</span>
+                </summary>
+                <div className="mt-4 space-y-3 border-t border-white/[0.08] pt-4">
+                  <StatusLine label="กล้องและการจับมือ" value={settings.enabled ? handCount > 0 ? `ทำงาน · ${handCount} มือ` : 'เปิดแล้ว · ยังไม่พบมือ' : 'พักอยู่'} active={settings.enabled && handCount > 0} />
+                  <StatusLine label="เส้นโครงมือ" value={settings.showSkeleton ? 'เปิด · ข้อมือถึงปลายนิ้ว 21 จุดต่อมือ' : 'ปิดในการตั้งค่าการแสดงผล'} active={settings.showSkeleton} />
+                  <StatusLine label="จำแนกท่ามือและรูปประกอบ" value={`${Object.keys(imageSources).length} รูปกำหนดเอง · รูปจะจำในเบราว์เซอร์นี้`} active />
+                  <StatusLine label="วาดกลางอากาศ" value={airDrawMode ? 'เปิด · ยกนิ้วชี้แล้วลาก' : 'ปิด'} active={airDrawMode} />
+                  <StatusLine label="โหมดสตรีม" value={streamMode ? 'เปิด · ซ่อนแผงควบคุม' : 'พร้อมเปิดจากปุ่มโหมดสตรีม'} active={streamMode} />
+                  <StatusLine label="ถ่ายภาพหน้าจอ" value="พร้อมใช้ · กดไอคอนกล้องบนภาพสดเพื่อบันทึก PNG" active />
+                  <StatusLine label="ชาเลนจ์ท่ามือ" value={challengeActive ? `กำลังเล่น · ${challengeStep}/${challengeSequence.length} ท่า` : challengeComplete ? 'ทำครบแล้ว' : 'พร้อมเริ่ม'} active={challengeActive || challengeComplete} />
+                  <div className="rounded-xl border border-white/[0.07] bg-[#201d1b] px-3 py-2.5 text-xs leading-5 text-[#aaa39d]">
+                    ระบบประมวลผลภาพในเบราว์เซอร์ ต้องอนุญาตใช้กล้องก่อน · ซูม 0.5× ใช้ได้เฉพาะกล้องที่เบราว์เซอร์รายงานว่ารองรับ · มือถือจะเป็นกล้องเว็บแคมของคอมได้เมื่อเชื่อมต่อเป็นเว็บแคมก่อน
+                  </div>
+                </div>
+              </details>
+            </section>
+
             <p className="px-1 text-xs leading-5 text-[#77716c]">
               ประมวลผลภาพในเบราว์เซอร์ · กล้องมือถือใช้กับคอมได้เมื่อเชื่อมเป็นเว็บแคมก่อน
             </p>
           </aside>}
         </div>
       </main>
+    </div>
+  );
+}
+
+function StatusLine({ label, value, active }: { label: string; value: string; active: boolean }) {
+  return (
+    <div className="flex items-start justify-between gap-3 text-xs">
+      <span className="shrink-0 text-[#c7c0ba]">{label}</span>
+      <span className="flex items-start gap-2 text-right text-[#85807b]">
+        <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${active ? 'bg-[#70d6b5]' : 'bg-[#706a65]'}`} />
+        {value}
+      </span>
     </div>
   );
 }
