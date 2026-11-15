@@ -54,6 +54,7 @@ interface HandTrackerProps {
   settings: HandTrackerSettings;
   onFps?: (fps: number) => void;
   onResults?: (result: { count: number; gestures: HandResult[] }) => void;
+  onScreenshot?: () => void;
   imageSources?: HandImageSources;
   imageLayout?: HandImageLayout;
   onImageLayoutChange?: (layout: HandImageLayout) => void;
@@ -105,7 +106,7 @@ export const GESTURE_LABELS: Record<HandGesture, string> = {
   none: '',
 };
 
-export function HandTracker({ settings, onFps, onResults, imageSources = {}, imageLayout = { x: 58, y: 12, size: 38 }, onImageLayoutChange, streamMode = false, onToggleStreamMode, airDrawMode = false, drawingColor = '#ff78a8', drawingWidth = 5, clearDrawingToken = 0 }: HandTrackerProps) {
+export function HandTracker({ settings, onFps, onResults, onScreenshot, imageSources = {}, imageLayout = { x: 58, y: 12, size: 38 }, onImageLayoutChange, streamMode = false, onToggleStreamMode, airDrawMode = false, drawingColor = '#ff78a8', drawingWidth = 5, clearDrawingToken = 0 }: HandTrackerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const backdropVideoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -597,6 +598,7 @@ export function HandTracker({ settings, onFps, onResults, imageSources = {}, ima
     link.href = output.toDataURL('image/png');
     link.click();
     setMessage('บันทึกภาพหน้าจอแล้ว');
+    onScreenshot?.();
   };
   const startImageDrag = (event: ReactPointerEvent<HTMLImageElement>) => {
     event.preventDefault();

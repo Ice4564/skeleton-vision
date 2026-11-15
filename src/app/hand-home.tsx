@@ -10,7 +10,7 @@ import {
   Heart,
   Fingerprint,
   ImagePlus,
-  Info,
+  Terminal,
   MonitorPlay,
   MousePointer2,
   Pause,
@@ -73,9 +73,30 @@ export default function HandHome() {
   const [challengeStep, setChallengeStep] = useState(0);
   const [challengeActive, setChallengeActive] = useState(false);
   const [challengeComplete, setChallengeComplete] = useState(false);
+  const [runtimeLog, setRuntimeLog] = useState<{ id: number; time: string; text: string; kind: 'system' | 'success' | 'event' }[]>([]);
   const lastUpdateRef = useRef(0);
+  const lastDetectionRef = useRef<{ count: number; gestures: string }>({ count: 0, gestures: '' });
+  const logScrollRef = useRef<HTMLDivElement>(null);
   const imageUrlsRef = useRef<HandImageSources>({});
+  const currentImageSourcesRef = useRef<HandImageSources>({});
   const challengeStreakRef = useRef(0);
+  currentImageSourcesRef.current = imageSources;
+
+  const appendLog = useCallback((text: string, kind: 'system' | 'success' | 'event' = 'event') => {
+    const now = new Date();
+    const time = `${now.toLocaleTimeString('th-TH', { hour12: false })}.${String(now.getMilliseconds()).padStart(3, '0')}`;
+    setRuntimeLog((lines) => [...lines, { id: Date.now() + Math.random(), time, text, kind }].slice(-80));
+  }, []);
+
+  useEffect(() => {
+    if (!runtimeLog.length) return;
+    logScrollRef.current?.scrollTo({ top: logScrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [runtimeLog]);
+
+  useEffect(() => {
+    if (settings.enabled) appendLog('camera.start() → ขอสิทธิ์กล้องและเตรียมโมเดลตรวจจับมือ', 'system');
+    else appendLog('camera.stop() → หยุดประมวลผลภาพจากกล้อง', 'system');
+  }, [settings.enabled, appendLog]);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,6 +153,7 @@ export default function HandHome() {
       challengeStreakRef.current += 1;
       if (challengeStreakRef.current >= 2) {
         challengeStreakRef.current = 0;
+        appendLog(`challenge.step() → ผ่านท่า${GESTURE_LABELS[target]}`, 'success');
         if (challengeStep + 1 >= challengeSequence.length) {
           setChallengeStep(challengeSequence.length);
           setChallengeActive(false);
@@ -143,7 +165,7 @@ export default function HandHome() {
     } else {
       challengeStreakRef.current = 0;
     }
-  }, [gestures, challengeActive, challengeSequence, challengeStep]);
+  }, [gestures, challengeActive, challengeSequence, challengeStep, appendLog]);
 
   const handleResults = useCallback((result: { count: number; gestures: HandResult[] }) => {
     const now = performance.now();
@@ -151,7 +173,19 @@ export default function HandHome() {
     lastUpdateRef.current = now;
     setHandCount(result.count);
     setGestures(result.gestures);
-  }, []);
+    const active = result.gestures.filter((item) => item.gesture !== 'none');
+    const signature = active.map((item) => `${item.side}:${item.gesture}`).join(',');
+    const previous = lastDetectionRef.current;
+    if (result.count !== previous.count) {
+      appendLog(result.count > 0 ? `hands.detect() → พบ ${result.count} มือ · สร้างจุดข้อต่อ 21 จุดต่อมือ` : 'hands.detect() → ไม่พบมือในภาพ', result.count > 0 ? 'success' : 'system');
+    }
+    if (signature !== previous.gestures && signature) {
+      appendLog(`gesture.classify() → ${active.map((item) => `${item.side === 'Left' ? 'มือซ้าย' : 'มือขวา'}: ${GESTURE_LABELS[item.gesture]}`).join(' · ')}`, 'success');
+      const imageGesture = active.find((item) => currentImageSourcesRef.current[item.gesture]);
+      if (imageGesture) appendLog(`overlay.show() → แสดงรูปที่ผูกกับท่า${GESTURE_LABELS[imageGesture.gesture]}`, 'event');
+    }
+    lastDetectionRef.current = { count: result.count, gestures: signature };
+  }, [appendLog]);
 
   const update = useCallback(<K extends keyof HandTrackerSettings>(key: K, value: HandTrackerSettings[K]) => {
     setSettings((current) => ({ ...current, [key]: value }));
@@ -175,8 +209,10 @@ export default function HandHome() {
       imageUrlsRef.current = next;
       setImageSources(next);
       setUploadMessage(`บันทึกรูปสำหรับท่า${GESTURE_LABELS[gesture]}แล้ว`);
+      appendLog(`images.save() → บันทึกรูปท่า${GESTURE_LABELS[gesture]}ไว้ในเบราว์เซอร์`, 'success');
     } catch {
       setUploadMessage('บันทึกรูปไม่สำเร็จ ลองเลือกรูปที่เล็กลง');
+      appendLog(`images.save() → บันทึกรูปท่า${GESTURE_LABELS[gesture]}ไม่สำเร็จ`, 'system');
     }
   };
 
@@ -190,6 +226,7 @@ export default function HandHome() {
       imageUrlsRef.current = next;
       setImageSources(next);
       setUploadMessage(`ลบรูปที่เลือกไว้สำหรับท่า${GESTURE_LABELS[gesture]}แล้ว`);
+      appendLog(`images.delete() → ลบรูปท่า${GESTURE_LABELS[gesture]}แล้ว`);
     } catch {
       setUploadMessage('ลบรูปไม่สำเร็จ ลองใหม่อีกครั้ง');
     }
@@ -206,6 +243,7 @@ export default function HandHome() {
     setChallengeComplete(false);
     setChallengeActive(true);
     challengeStreakRef.current = 0;
+    appendLog('challenge.start() → สุ่มท่ามือ 3 ท่า รอตรวจพบแต่ละท่าต่อเนื่อง', 'system');
     if (!settings.enabled) update('enabled', true);
   };
 
@@ -264,10 +302,11 @@ export default function HandHome() {
               settings={settings}
               onFps={setFps}
               onResults={handleResults}
+              onScreenshot={() => appendLog('capture.download() → บันทึกภาพกล้องและโครงมือเป็น PNG', 'success')}
               imageSources={imageSources}
               imageLayout={imageLayout}
               streamMode={streamMode}
-              onToggleStreamMode={() => setStreamMode(false)}
+              onToggleStreamMode={() => { setStreamMode(false); appendLog('stream.exit() → กลับสู่หน้าควบคุม'); }}
               airDrawMode={airDrawMode}
               drawingColor={drawingColor}
               drawingWidth={drawingWidth}
@@ -306,13 +345,13 @@ export default function HandHome() {
               <SmallButton onClick={() => update('showVideo', !settings.showVideo)} icon={<Camera className="h-4 w-4" />}>
                 ภาพ {settings.showVideo ? 'เปิด' : 'ปิด'}
               </SmallButton>
-              <SmallButton onClick={() => { setStreamMode(true); if (!settings.enabled) update('enabled', true); }} icon={<MonitorPlay className="h-4 w-4" />}>
+              <SmallButton onClick={() => { setStreamMode(true); appendLog('stream.enter() → ขยายภาพสดเต็มจอและซ่อนแผงควบคุม'); if (!settings.enabled) update('enabled', true); }} icon={<MonitorPlay className="h-4 w-4" />}>
                 โหมดสตรีม
               </SmallButton>
-              <SmallButton onClick={() => setAirDrawMode((current) => !current)} icon={<Fingerprint className="h-4 w-4" />}>
+              <SmallButton onClick={() => setAirDrawMode((current) => { appendLog(current ? 'draw.stop() → หยุดวาดกลางอากาศ' : 'draw.start() → เปิดวาดกลางอากาศด้วยปลายนิ้วชี้'); return !current; })} icon={<Fingerprint className="h-4 w-4" />}>
                 วาดกลางอากาศ {airDrawMode ? 'เปิด' : 'ปิด'}
               </SmallButton>
-              {airDrawMode && <SmallButton onClick={() => setClearDrawingToken((current) => current + 1)} icon={<Trash2 className="h-4 w-4" />}>ล้างเส้น</SmallButton>}
+              {airDrawMode && <SmallButton onClick={() => { setClearDrawingToken((current) => current + 1); appendLog('draw.clear() → ล้างเส้นที่วาดทั้งหมด'); }} icon={<Trash2 className="h-4 w-4" />}>ล้างเส้น</SmallButton>}
             </div>}
 
             {!streamMode && <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -384,7 +423,7 @@ export default function HandHome() {
                       type="button"
                       key={gesture}
                       aria-pressed={selected}
-                      onClick={() => setSelectedGesture(selected ? null : gesture)}
+                      onClick={() => { setSelectedGesture(selected ? null : gesture); appendLog(selected ? `practice.stop() → หยุดทดสอบท่า${GESTURE_LABELS[gesture]}` : `practice.start() → รอตรวจจับท่า${GESTURE_LABELS[gesture]}`); }}
                       className={`flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left transition-colors ${
                         active ? 'border-[#ff7899]/50 bg-[#2a1d20]' : selected ? 'border-[#ffb4ce]/50 bg-[#272023]' : 'border-white/[0.07] bg-[#201d1b]'
                       }`}
@@ -504,34 +543,28 @@ export default function HandHome() {
               </p>
             </section>
 
-            <section className="rounded-2xl border border-white/[0.08] bg-[#191816] p-4 sm:p-5">
-              <details className="group">
-                <summary className="flex cursor-pointer list-none items-center gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#22201e] text-[#ffb4ce]">
-                    <Info className="h-[18px] w-[18px]" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-medium">วิธีใช้และสถานะระบบ</span>
-                    <span className="mt-1 block text-xs text-[#85807b]">
-                      {settings.enabled
-                        ? handCount > 0 ? `กล้องทำงาน · พบ ${handCount} มือ` : 'กล้องเปิดอยู่ · กำลังรอมือในภาพ'
-                        : 'กล้องพักอยู่ · กด “เริ่มจับมือ” เพื่อเริ่ม'}
-                    </span>
-                  </span>
-                  <span className="text-xs text-[#aaa39d] group-open:hidden">ดู</span>
-                  <span className="hidden text-xs text-[#aaa39d] group-open:inline">ซ่อน</span>
+            <section className="overflow-hidden rounded-2xl border border-[#26312d] bg-[#101512]">
+              <details open>
+                <summary className="flex cursor-pointer list-none items-center gap-3 border-b border-white/[0.07] px-4 py-3">
+                  <Terminal className="h-[18px] w-[18px] text-[#70d6b5]" />
+                  <span className="flex-1 text-sm font-medium">Live Runtime · การทำงานสด</span>
+                  <span className="flex items-center gap-1.5 font-mono text-[10px] text-[#70d6b5]"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#70d6b5]" /> LIVE</span>
                 </summary>
-                <div className="mt-4 space-y-3 border-t border-white/[0.08] pt-4">
-                  <StatusLine label="กล้องและการจับมือ" value={settings.enabled ? handCount > 0 ? `ทำงาน · ${handCount} มือ` : 'เปิดแล้ว · ยังไม่พบมือ' : 'พักอยู่'} active={settings.enabled && handCount > 0} />
-                  <StatusLine label="เส้นโครงมือ" value={settings.showSkeleton ? 'เปิด · ข้อมือถึงปลายนิ้ว 21 จุดต่อมือ' : 'ปิดในการตั้งค่าการแสดงผล'} active={settings.showSkeleton} />
-                  <StatusLine label="จำแนกท่ามือและรูปประกอบ" value={`${Object.keys(imageSources).length} รูปกำหนดเอง · รูปจะจำในเบราว์เซอร์นี้`} active />
-                  <StatusLine label="วาดกลางอากาศ" value={airDrawMode ? 'เปิด · ยกนิ้วชี้แล้วลาก' : 'ปิด'} active={airDrawMode} />
-                  <StatusLine label="โหมดสตรีม" value={streamMode ? 'เปิด · ซ่อนแผงควบคุม' : 'พร้อมเปิดจากปุ่มโหมดสตรีม'} active={streamMode} />
-                  <StatusLine label="ถ่ายภาพหน้าจอ" value="พร้อมใช้ · กดไอคอนกล้องบนภาพสดเพื่อบันทึก PNG" active />
-                  <StatusLine label="ชาเลนจ์ท่ามือ" value={challengeActive ? `กำลังเล่น · ${challengeStep}/${challengeSequence.length} ท่า` : challengeComplete ? 'ทำครบแล้ว' : 'พร้อมเริ่ม'} active={challengeActive || challengeComplete} />
-                  <div className="rounded-xl border border-white/[0.07] bg-[#201d1b] px-3 py-2.5 text-xs leading-5 text-[#aaa39d]">
-                    ระบบประมวลผลภาพในเบราว์เซอร์ ต้องอนุญาตใช้กล้องก่อน · ซูม 0.5× ใช้ได้เฉพาะกล้องที่เบราว์เซอร์รายงานว่ารองรับ · มือถือจะเป็นกล้องเว็บแคมของคอมได้เมื่อเชื่อมต่อเป็นเว็บแคมก่อน
-                  </div>
+                <div ref={logScrollRef} aria-live="polite" aria-label="บันทึกการทำงานสด" className="h-52 space-y-2 overflow-y-auto px-3 py-3 font-mono text-[11px] leading-5 sm:h-60">
+                  {runtimeLog.length === 0 ? (
+                    <p className="text-[#8b9690]"><span className="text-[#70d6b5]">[SYSTEM]</span> พร้อมแสดงลำดับการทำงาน รอเหตุการณ์จากกล้อง...</p>
+                  ) : runtimeLog.map((line) => (
+                    <p key={line.id} className="break-words text-[#d3ddd6]">
+                      <span className="text-[#68766e]">[{line.time}]</span>{' '}
+                      <span className={line.kind === 'success' ? 'text-[#70d6b5]' : line.kind === 'system' ? 'text-[#f0bd7a]' : 'text-[#a6c8ff]'}>
+                        {line.kind === 'success' ? '[OK]' : line.kind === 'system' ? '[SYSTEM]' : '[EVENT]'}
+                      </span>{' '}{line.text}
+                    </p>
+                  ))}
+                  <p className="animate-pulse text-[#70d6b5]">▍</p>
+                </div>
+                <div className="border-t border-white/[0.07] px-3 py-2 text-[10px] leading-4 text-[#77827b]">
+                  แสดงเฉพาะเหตุการณ์สำคัญ เช่น กล้องเริ่มทำงาน พบมือ จำแนกท่า วาดภาพ และบันทึกรูป ไม่แสดงทุกเฟรมเพื่อให้อ่านทัน
                 </div>
               </details>
             </section>
@@ -542,18 +575,6 @@ export default function HandHome() {
           </aside>}
         </div>
       </main>
-    </div>
-  );
-}
-
-function StatusLine({ label, value, active }: { label: string; value: string; active: boolean }) {
-  return (
-    <div className="flex items-start justify-between gap-3 text-xs">
-      <span className="shrink-0 text-[#c7c0ba]">{label}</span>
-      <span className="flex items-start gap-2 text-right text-[#85807b]">
-        <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${active ? 'bg-[#70d6b5]' : 'bg-[#706a65]'}`} />
-        {value}
-      </span>
     </div>
   );
 }
